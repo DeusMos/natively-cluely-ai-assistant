@@ -1229,6 +1229,7 @@ console.error = (...args: any[]) => {
 import { initializeIpcHandlers } from "./ipcHandlers"
 import { WindowHelper } from "./WindowHelper"
 import { surfaceLinuxSystemAudioError } from './platform/permissionMessages';
+import { isNonRecoverableLinuxSystemAudioError } from './platform/linuxSystemAudioErrors';
 import { detectDisplaySession } from './platform/linuxSessionGate';
 import { shouldBlockLinuxSystemAudioAtMeetingStart } from './platform/linuxMeetingGate';
 import { setCompositorWarningCallback } from './platform/x11Compositor';
@@ -4230,6 +4231,9 @@ export class AppState {
     (capture as any).__disarmStuckWatchdog = disarmStuckWatchdog;
     capture.on('start', armStuckWatchdog);
     capture.on('stop', disarmStuckWatchdog);
+    capture.on('error', () => {
+      if (stuckTimer) { clearTimeout(stuckTimer); stuckTimer = null; }
+    });
     capture.on('data', (chunk: Buffer) => {
       const now = Date.now();
       handleSystemAudioHealthDecision(systemAudioHealth.handle({ kind: 'chunk', nowMs: now, chunk }));
@@ -4343,6 +4347,9 @@ export class AppState {
     (capture as any).__disarmStuckWatchdog = disarmStuckWatchdog;
     capture.on('start', armStuckWatchdog);
     capture.on('stop', disarmStuckWatchdog);
+    capture.on('error', () => {
+      if (stuckTimer) { clearTimeout(stuckTimer); stuckTimer = null; }
+    });
     // Inter-chunk gap tracking — see wireSystemCapture for rationale.
     let lastChunkAt = 0;
     // Mic TCC / muted-input zero-fill detector. cpal will happily open a mic
@@ -5633,6 +5640,23 @@ export class AppState {
         return;
       }
 
+      if (process.platform === 'linux' && isNonRecoverableLinuxSystemAudioError(err)) {
+        const userMessage = surfaceLinuxSystemAudioError(err).message;
+        console.warn(
+          `[AudioRecovery] Non-recoverable Linux system audio error — skipping recovery: ${userMessage}`,
+        );
+        this.sendAudioCaptureFailed({
+          channel: 'system',
+          message: userMessage,
+          attempt: 0,
+          maxAttempts: 0,
+          terminal: true,
+          stuck: false,
+        });
+        this.sendSystemAudioPermissionDenied(userMessage, permissionTitleKey('system-audio-stuck'));
+        return;
+      }
+
       const now = Date.now();
       this._systemAudioLastFailureAt = now;
       this._systemAudioConsecutiveFailures++;
@@ -5748,7 +5772,7 @@ export class AppState {
             terminal: true,
           });
           if (process.platform === 'linux') {
-            this.broadcast('system-audio-permission-denied', formatPermissionMessage('screen-recording-denied'));
+            this.sendSystemAudioPermissionDenied(formatPermissionMessage('screen-recording-denied'), permissionTitleKey('screen-recording-denied'));
           }
         }
       } finally {
@@ -9572,7 +9596,7 @@ if (process.env.THINKING_MATRIX === '1') {
 
     if (session.isSupported) {
       appState.setLinuxCaptureDisabled(false);
-    } else if (!session.isSupported) {
+    } else {
       const response = dialog.showMessageBoxSync({
         type: 'warning',
         title: 'X11 session required',

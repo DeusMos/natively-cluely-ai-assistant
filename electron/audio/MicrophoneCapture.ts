@@ -371,6 +371,7 @@ export class MicrophoneCapture extends EventEmitter {
         this.preWarmEnabled = false;
         this.isRecording = false;
         const monitor = this.monitor;
+        this.emit('stop');
         this.removeAllListeners();
         this.monitor = null;
         monitor?.stop();

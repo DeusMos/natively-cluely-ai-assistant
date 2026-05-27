@@ -361,6 +361,7 @@ export class SystemAudioCapture extends EventEmitter {
         this.sampleRatePollTimers = [];
         this.isRecording = false;
         const monitor = this.monitor;
+        this.emit('stop');
         this.removeAllListeners();
         this.monitor = null;
         monitor?.stop();
