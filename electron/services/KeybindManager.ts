@@ -11,6 +11,7 @@ import {
 import { isRegisterableAccelerator, probeAccelerator } from './acceleratorValidation';
 import { buildChordTable, type Win32Chord } from './winChord';
 import { SettingsManager } from './SettingsManager';
+import { formatPermissionMessage } from '../platform/permissionMessages';
 
 export interface KeybindConfig {
     id: string;
@@ -74,6 +75,16 @@ export const DEFAULT_KEYBINDS: KeybindConfig[] = [
     { id: 'window:move-left', label: 'Move Window Left', accelerator: 'CommandOrControl+Shift+Left', isGlobal: true, defaultAccelerator: 'CommandOrControl+Shift+Left' },
     { id: 'window:move-right', label: 'Move Window Right', accelerator: 'CommandOrControl+Shift+Right', isGlobal: true, defaultAccelerator: 'CommandOrControl+Shift+Right' },
 ];
+
+function registrationFailureMessage(accelerator: string): string {
+    if (process.platform === 'linux') {
+        return formatPermissionMessage('linux-shortcut-conflict', { accelerator });
+    }
+    if (process.platform === 'darwin') {
+        return `Could not register ${accelerator}. Check System Settings → Privacy & Security → Accessibility.`;
+    }
+    return `Could not register ${accelerator}. Another application may be using this shortcut.`;
+}
 
 export class KeybindManager {
     private static instance: KeybindManager;
@@ -394,9 +405,12 @@ export class KeybindManager {
         if (this.registrationFailures === before) return;
 
         const channel = ok ? 'keybinds:registration-succeeded' : 'keybinds:registration-failed';
+        const payload = ok
+            ? { id, accelerator }
+            : { id, accelerator, message: registrationFailureMessage(accelerator) };
         BrowserWindow.getAllWindows().forEach(win => {
             if (!win.isDestroyed()) {
-                win.webContents.send(channel, { id, accelerator });
+                win.webContents.send(channel, payload);
             }
         });
     }

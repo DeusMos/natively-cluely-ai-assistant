@@ -362,6 +362,20 @@ export class MicrophoneCapture extends EventEmitter {
         this.preWarmEnabled = false;
     }
 
+    /**
+     * Quit path only — synchronous native release. See
+     * SystemAudioCapture.releaseForQuit() for why the deferred teardown in
+     * stop()/destroy() is not enough while the process is exiting.
+     */
+    public releaseForQuit(): void {
+        this.preWarmEnabled = false;
+        this.isRecording = false;
+        const monitor = this.monitor;
+        this.removeAllListeners();
+        this.monitor = null;
+        monitor?.stop();
+    }
+
     public async destroy(): Promise<void> {
         // Disable pre-warm BEFORE awaiting stop(). Without this, the
         // teardown promise's .then() would happily reconstruct a fresh

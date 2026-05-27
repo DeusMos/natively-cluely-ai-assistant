@@ -15,7 +15,7 @@ import './llm/promptDebug';
 import './utils/pinUserData';
 
 import { buildEmbeddingConfig } from './rag/embeddingConfigIdentity';
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, systemPreferences, screen, desktopCapturer } from "electron"
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, systemPreferences, screen, desktopCapturer, dialog } from "electron"
 import * as crypto from "crypto"
 import path from "path"
 import fs from "fs"
@@ -1035,11 +1035,16 @@ type PermissionReason =
   | 'mic-denied'
   | 'mic-zero-fill'
   | 'mac-same-device-input-output'
-  | 'system-audio-stuck';
+  | 'system-audio-stuck'
+  | 'linux-session-unsupported';
 function formatPermissionMessage(reason: PermissionReason, extra?: { device?: string }): string {
   const isMac = process.platform === 'darwin';
+  const isLinux = process.platform === 'linux';
   switch (reason) {
     case 'screen-recording-denied':
+      if (isLinux) {
+        return "Interviewer audio won't be captured. Make sure PulseAudio or PipeWire (pipewire-pulse) is running, then restart the meeting.";
+      }
       if (!isMac) {
         return "Interviewer audio won't be captured. Check your output device routing in Settings, then restart the meeting.";
       }
@@ -1067,10 +1072,12 @@ function formatPermissionMessage(reason: PermissionReason, extra?: { device?: st
       if (!isMac) return formatPermissionMessage('system-audio-stuck');
       return 'System audio is arriving silent. Toggle Natively off and on under Privacy & Security → Screen Recording, then restart.';
     case 'mic-denied':
+      if (isLinux) return 'Allow microphone access in your desktop sound settings, then restart.';
       return isMac
         ? 'Enable Natively under Privacy & Security → Microphone, then restart.'
         : 'Enable Natively under Settings → Privacy → Microphone, then restart.';
     case 'mic-zero-fill':
+      if (isLinux) return "Check the device isn't muted, and that it is the selected input in your desktop sound settings.";
       return isMac
         ? "Check the device isn't muted, and that Natively is enabled under Privacy & Security → Microphone."
         : "Check the device isn't muted, and that Natively is enabled under Settings → Privacy → Microphone.";
@@ -1081,7 +1088,12 @@ function formatPermissionMessage(reason: PermissionReason, extra?: { device?: st
       if (!isMac) return formatPermissionMessage('system-audio-stuck');
       return `macOS can't tap ${extra?.device ?? 'this device'} while it's also the active mic. Switch input to the built-in mic, or output to the built-in speakers.`;
     case 'system-audio-stuck':
+      if (isLinux) {
+        return 'Confirm media is playing on your default output and that PulseAudio/PipeWire is running, then restart the meeting.';
+      }
       return 'If your meeting app outputs to a different device (headset, virtual cable, second display), switch it to your default output.';
+    case 'linux-session-unsupported':
+      return 'Wayland sessions are unsupported. Log out and choose an X11 (Xorg) session, then restart Natively.';
   }
 }
 
@@ -1123,6 +1135,8 @@ function permissionTitleKey(reason: PermissionReason): string {
       return 'Input and Output Are the Same Device';
     case 'system-audio-stuck':
       return 'No System Audio for 8s';
+    case 'linux-session-unsupported':
+      return 'Unsupported Linux Session';
   }
 }
 
@@ -1214,6 +1228,10 @@ console.error = (...args: any[]) => {
 
 import { initializeIpcHandlers } from "./ipcHandlers"
 import { WindowHelper } from "./WindowHelper"
+import { surfaceLinuxSystemAudioError } from './platform/permissionMessages';
+import { detectDisplaySession } from './platform/linuxSessionGate';
+import { shouldBlockLinuxSystemAudioAtMeetingStart } from './platform/linuxMeetingGate';
+import { setCompositorWarningCallback } from './platform/x11Compositor';
 import { SettingsWindowHelper } from "./SettingsWindowHelper"
 import { ModelSelectorWindowHelper } from "./ModelSelectorWindowHelper"
 import { CropperWindowHelper } from "./CropperWindowHelper"
@@ -2511,12 +2529,39 @@ export class AppState {
     return this.isMeetingActive;
   }
 
+  public setLinuxCaptureDisabled(disabled: boolean): void {
+    this._linuxCaptureDisabled = disabled;
+  }
+
+  public isLinuxCaptureDisabled(): boolean {
+    return this._linuxCaptureDisabled;
+  }
+
   public isQuitting(): boolean {
     return this._isQuitting;
   }
 
   public setQuitting(value: boolean): void {
     this._isQuitting = value;
+  }
+
+  /** Synchronous Pulse/CoreAudio release on app exit (before V8 teardown). */
+  public releaseAudioCapturesForQuit(): void {
+    try {
+      this.systemAudioCapture?.releaseForQuit();
+    } catch (e) {
+      console.error('[Main] systemAudioCapture release on quit failed:', e);
+    }
+    this.systemAudioCapture = null;
+
+    try {
+      this.microphoneCapture?.releaseForQuit();
+    } catch (e) {
+      console.error('[Main] microphoneCapture release on quit failed:', e);
+    }
+    this.microphoneCapture = null;
+
+    this.stopDefaultOutputWatcher();
   }
 
   private broadcastMeetingState(): void {
@@ -3359,6 +3404,8 @@ export class AppState {
   // New Property for System Audio & Microphone
   private systemAudioCapture: SystemAudioCapture | null = null;
   private microphoneCapture: MicrophoneCapture | null = null;
+  /** Set when Linux session gate blocks capture (unsupported Wayland / no DISPLAY). */
+  private _linuxCaptureDisabled = false;
   private audioTestCapture: MicrophoneCapture | null = null; // For audio settings test
   private _audioTestStarting = false;               // P2-12: in-flight guard against concurrent calls
   private googleSTT: STTProvider | null = null; // Interviewer
@@ -4463,7 +4510,26 @@ export class AppState {
       // identified for "permissions granted (then revoked), no transcription."
       const screenCapability = await resolveMacScreenCaptureCapability('system audio pipeline setup');
 
-      if (screenCapability.effectiveDenied) {
+      const linuxSession =
+        process.platform === 'linux' ? detectDisplaySession() : null;
+      const blockLinuxSystemAudio =
+        linuxSession !== null &&
+        shouldBlockLinuxSystemAudioAtMeetingStart(this._linuxCaptureDisabled, linuxSession);
+
+      if (blockLinuxSystemAudio) {
+        console.warn('[Main] Skipping SystemAudioCapture init — unsupported Linux session (capture disabled). Meeting will run mic-only.');
+        this.sendSystemAudioPermissionDenied(
+          formatPermissionMessage('linux-session-unsupported'),
+          permissionTitleKey('linux-session-unsupported'),
+        );
+        this.broadcastDeviceSelection({
+          kind: 'output',
+          requested: null,
+          actual: null,
+          fellBack: true,
+          reason: 'linux-session-unsupported',
+        });
+      } else if (screenCapability.effectiveDenied) {
         const message = screenCapability.message ?? formatPermissionMessage('screen-recording-denied');
         console.warn('[Main] Screen Recording permission denied at pipeline setup. Tearing down any stale system audio capture; meeting will run mic-only.');
         this.sendSystemAudioPermissionDenied(message, screenCapability.titleKey ?? permissionTitleKey('screen-recording-denied'));
@@ -5589,9 +5655,12 @@ export class AppState {
       // "ScreenCaptureKit access denied", "No displays found") instead of just
       // a generic STT 'reconnecting' indicator. This event is non-fatal — the
       // recovery attempt may still succeed.
+      const userMessage = process.platform === 'linux'
+        ? surfaceLinuxSystemAudioError(err).message
+        : err.message;
       this.sendAudioCaptureFailed( {
         channel: 'system',
-        message: err.message,
+        message: userMessage,
         attempt: this._systemAudioRecoveryAttempts,
         maxAttempts: 3,
       });
@@ -5668,13 +5737,19 @@ export class AppState {
         // for this meeting so it can stop showing "reconnecting" and surface a
         // mic-only banner instead.
         if (this._systemAudioRecoveryAttempts >= 3 && isRecoveryCurrentMeeting()) {
+          const terminalMessage = process.platform === 'linux'
+            ? surfaceLinuxSystemAudioError(recoveryErr ?? err).message
+            : `System audio capture gave up after 3 attempts. Last error: ${recoveryErr?.message || err.message}`;
           this.sendAudioCaptureFailed( {
             channel: 'system',
-            message: `System audio capture gave up after 3 attempts. Last error: ${recoveryErr?.message || err.message}`,
+            message: terminalMessage,
             attempt: this._systemAudioRecoveryAttempts,
             maxAttempts: 3,
             terminal: true,
           });
+          if (process.platform === 'linux') {
+            this.broadcast('system-audio-permission-denied', formatPermissionMessage('screen-recording-denied'));
+          }
         }
       } finally {
         this._systemAudioRecoveryInProgress = false;
@@ -6633,6 +6708,19 @@ export class AppState {
         }
         // 'not-determined': Handled at startup. SCK/CoreAudio will trigger the TCC
         // dialog itself when it first attempts to access screen content.
+      } else if (process.platform === 'linux') {
+        const session = detectDisplaySession();
+        console.log(`[Main] Linux display session at meeting start: type=${session.sessionType}, supported=${session.isSupported}`);
+        // Clear stale "limited features" flag when the session is actually supported
+        // (e.g. false Wayland detection at startup, or env fixed after first launch).
+        if (session.isSupported) {
+          this.setLinuxCaptureDisabled(false);
+        }
+        if (shouldBlockLinuxSystemAudioAtMeetingStart(this._linuxCaptureDisabled, session)) {
+          const message = formatPermissionMessage('linux-session-unsupported');
+          console.warn('[Main]', message);
+          this.sendSystemAudioPermissionDenied(message, permissionTitleKey('linux-session-unsupported'));
+        }
       }
     }
 
@@ -9460,6 +9548,49 @@ if (process.env.THINKING_MATRIX === '1') {
     return;
   }
 
+  // Linux X11 session gate (ADR 0001 / F0.1) and compositor warning wiring.
+  if (process.platform === 'linux') {
+    setCompositorWarningCallback(() => {
+      try {
+        dialog.showMessageBoxSync({
+          type: 'warning',
+          title: 'Compositor not detected',
+          message: 'Transparent overlay may not work correctly.',
+          detail:
+            'No X11 compositor was detected. Enable your desktop compositor (e.g. picom) or use a composited X11 session for transparent overlay backgrounds.',
+          buttons: ['OK'],
+        });
+      } catch (e: unknown) {
+        console.warn('[Init] Compositor warning dialog failed:', e);
+      }
+    });
+
+    const session = detectDisplaySession();
+    console.log(
+      `[Init] Linux display session: type=${session.sessionType}, supported=${session.isSupported}, reason=${session.reason}`,
+    );
+
+    if (session.isSupported) {
+      appState.setLinuxCaptureDisabled(false);
+    } else if (!session.isSupported) {
+      const response = dialog.showMessageBoxSync({
+        type: 'warning',
+        title: 'X11 session required',
+        message: 'This Linux session is not supported for Natively v1.',
+        detail:
+          `${session.reason}\n\nNatively requires an X11 (Xorg) login session. Wayland-native sessions are unsupported. See docs/adr/0001-linux-x11-only.md.`,
+        buttons: ['Quit', 'Continue with limited features'],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      if (response === 0) {
+        app.quit();
+        return;
+      }
+      appState.setLinuxCaptureDisabled(true);
+    }
+  }
+
   // PERF: pre-construct STT provider objects so the meeting-start critical
   // path doesn't pay for class init + listener wiring. Runs after all
   // credentials are loaded (so the provider can read its API key) and is
@@ -10400,6 +10531,13 @@ if (process.env.THINKING_MATRIX === '1') {
       const { LocalModelDownloadService } = require('./services/LocalModelDownloadService');
       LocalModelDownloadService.getInstance().pauseForShutdown();
     } catch { /* optional */ }
+
+    // Release system/mic Pulse streams before V8 teardown (Linux HDMI stuck-audio fix).
+    try {
+      appState.releaseAudioCapturesForQuit();
+    } catch (e) {
+      console.error('[Main] releaseAudioCapturesForQuit failed:', e);
+    }
 
     // ROUND 2 FIX (#9): synchronously stop the CGEventTap worker thread
     // BEFORE V8 starts tearing down. The tap callback holds an
