@@ -2961,7 +2961,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         // cheap in-memory read regardless of whether `context` is set.
         let autoContextSnapshot: string | undefined;
         try {
-          const snap = intelligenceManager.getFormattedContext(100);
+          const snap = intelligenceManager.getInterviewContextForChat();
           if (snap && snap.trim().length > 0) autoContextSnapshot = snap;
         } catch (ctxErr) {
           console.warn('[IPC] Failed to capture pre-turn context:', ctxErr);
@@ -14915,6 +14915,33 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
+  // --- Sticky note windows (detached message cards) ---
+
+  safeHandle(
+    'sticky-note:create',
+    (
+      _,
+      payload: { id: string; text: string; intent?: string; x: number; y: number },
+    ) => {
+      if (!payload?.id || !payload.text?.trim()) return { success: false };
+      appState.stickyNoteWindowHelper.createNote(
+        { id: payload.id, text: payload.text, intent: payload.intent },
+        payload.x,
+        payload.y,
+      );
+      return { success: true };
+    },
+  );
+
+  safeHandle('sticky-note:get-content', (_, id: string) => {
+    return appState.stickyNoteWindowHelper.getPayload(id) ?? null;
+  });
+
+  safeHandle('sticky-note:close', (_, id: string) => {
+    appState.stickyNoteWindowHelper.closeNote(id);
+    return { success: true };
+  });
+
   // Native Audio Service Handlers
   // Native Audio handlers removed as part of migration to driverless architecture
   safeHandle('native-audio-status', async () => {
@@ -16182,6 +16209,58 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
+  // Live Requirements List — technical-interview only. Accept/dismiss/list + push via requirements-updated.
+  safeHandle('requirements:accept', async (_, id: string) => {
+    try {
+      if (typeof id !== 'string' || !id) {
+        return { success: false, error: 'invalid_requirement_id' };
+      }
+      const intelligenceManager = appState.getIntelligenceManager();
+      const item = intelligenceManager.acceptRequirement(id);
+      if (!item) return { success: false, error: 'not_found' };
+      try {
+        const { telemetryService } = require('./services/telemetry/TelemetryService');
+        telemetryService.track({
+          name: 'requirement_accepted',
+          properties: { requirementId: id, confidence: item.confidence },
+        });
+      } catch {
+        /* non-fatal */
+      }
+      return { success: true, requirement: item, requirements: intelligenceManager.getVisibleRequirements() };
+    } catch (error: any) {
+      return { success: false, error: error?.message ?? 'internal_error' };
+    }
+  });
+
+  safeHandle('requirements:dismiss', async (_, id: string) => {
+    try {
+      if (typeof id !== 'string' || !id) {
+        return { success: false, error: 'invalid_requirement_id' };
+      }
+      const intelligenceManager = appState.getIntelligenceManager();
+      intelligenceManager.dismissRequirement(id);
+      try {
+        const { telemetryService } = require('./services/telemetry/TelemetryService');
+        telemetryService.track({ name: 'requirement_dismissed', properties: { requirementId: id } });
+      } catch {
+        /* non-fatal */
+      }
+      return { success: true, requirements: intelligenceManager.getVisibleRequirements() };
+    } catch (error: any) {
+      return { success: false, error: error?.message ?? 'internal_error' };
+    }
+  });
+
+  safeHandle('requirements:list', async () => {
+    try {
+      const intelligenceManager = appState.getIntelligenceManager();
+      return { success: true, requirements: intelligenceManager.getVisibleRequirements() };
+    } catch (error: any) {
+      return { success: false, error: error?.message ?? 'internal_error', requirements: [] };
+    }
+  });
+
   safeHandle(
     'test-inject-transcript',
     async (_, segment: { speaker: string; text: string; timestamp?: number; final?: boolean }) => {
@@ -16848,9 +16927,100 @@ export function initializeIpcHandlers(appState: AppState): void {
         // handlers keep their terminal events because nothing falls back.
         // Live-reproduced in scripts/audit/F-118-repro.mjs.
       }
-      return { success: false, error: error.message };
+        return { success: false, error: error.message };
     } finally {
       activeRAGQueries.delete(queryKey);
+    }
+  });
+
+  safeHandle('generate-restate', async () => {
+    try {
+      const intelligenceManager = appState.getIntelligenceManager();
+      const restatement = await intelligenceManager.runRestate();
+      if (restatement === null) {
+        const win = appState.getMainWindow();
+        win?.webContents.send('intelligence-error', {
+          error: 'Could not restate the question. Try again after some audio context is available.',
+          mode: 'restate',
+        });
+      }
+      return { restatement };
+    } catch (error: any) {
+      throw error;
+    }
+  });
+
+  safeHandle('generate-lookup', async (_, focusTerm?: string) => {
+    try {
+      const intelligenceManager = appState.getIntelligenceManager();
+      let retrievedContext: string | undefined;
+      const ragManager = appState.getRAGManager();
+      const query = focusTerm?.trim() || intelligenceManager.getLastInterviewerTurn() || '';
+      if (ragManager?.isReady() && ragManager.isLiveIndexingActive('live-meeting-current') && ragManager.hasLiveChunks() && query) {
+        try {
+          const ctx = await ragManager.retrieveMeetingContext('live-meeting-current', query);
+          if (ctx) retrievedContext = ctx;
+        } catch (ragErr: any) {
+          console.warn('[IPC] Lookup live RAG retrieval skipped:', ragErr?.message);
+        }
+      }
+      const explanation = await intelligenceManager.runLookup(focusTerm, retrievedContext);
+      if (explanation === null) {
+        const win = appState.getMainWindow();
+        win?.webContents.send('intelligence-error', {
+          error: 'Could not generate a lookup explanation. Try again with more context.',
+          mode: 'lookup',
+        });
+      }
+      return { explanation };
+    } catch (error: any) {
+      throw error;
+    }
+  });
+
+  safeHandle('generate-late-join-backfill', async () => {
+    try {
+      const intelligenceManager = appState.getIntelligenceManager();
+      const summary = await intelligenceManager.runLateJoinBackfill();
+      return { summary };
+    } catch (error: any) {
+      throw error;
+    }
+  });
+
+  safeHandle('get-meeting-brief', async (_, eventId?: string) => {
+    try {
+      const { CalendarManager } = require('./services/CalendarManager');
+      const { MeetingBriefLLM } = require('./llm/MeetingBriefLLM');
+      const { ModesManager } = require('./services/ModesManager');
+      const cm = CalendarManager.getInstance();
+      const events = await cm.getUpcomingEvents();
+      const event = eventId
+        ? events?.find((e: any) => e.id === eventId)
+        : events?.[0];
+      const activeMode = ModesManager.getInstance().getActiveMode();
+      const briefLLM = new MeetingBriefLLM(appState.processingHelper.getLLMHelper());
+      const brief = await briefLLM.generate({
+        eventTitle: event?.title,
+        eventStart: event?.startTime,
+        attendees: event?.attendees?.map((a: any) => a.name || a.email).filter(Boolean),
+        activeModeName: activeMode?.name,
+      });
+
+      // Warm RAG preload for reference files when technical-interview mode is active
+      if (activeMode?.templateType === 'technical-interview') {
+        try {
+          const ragManager = appState.getRAGManager();
+          if (ragManager?.isReady()) {
+            ragManager.retryPendingEmbeddings().catch(() => {});
+          }
+        } catch { /* non-fatal */ }
+      }
+
+      return { brief, eventId: event?.id ?? null };
+    } catch (error: any) {
+      console.error('[IPC] get-meeting-brief error:', error);
+      return { brief: '', error: error.message };
     }
   });
 
@@ -18417,8 +18587,17 @@ export function initializeIpcHandlers(appState: AppState): void {
           indexedCount = statuses.filter((st: any) => st?.status === 'indexed' || (st?.chunkCount ?? 0) > 0).length;
         }
       } catch { /* indicator only */ }
+      const activeTemplateType = activeMode?.templateType ?? null;
       BrowserWindow.getAllWindows().forEach((win) => {
-        if (!win.isDestroyed()) win.webContents.send('mode-changed', { id, name: activeName, fileCount, indexedCount });
+        if (!win.isDestroyed()) {
+          win.webContents.send('mode-changed', {
+            id,
+            name: activeName,
+            fileCount,
+            indexedCount,
+            templateType: activeTemplateType,
+          });
+        }
       });
       // Phase 3 — re-bind dynamic action engine so the new mode's trigger pack
       // takes effect immediately. New (sessionId, modeId) pair flushes the per-
@@ -18432,11 +18611,13 @@ export function initializeIpcHandlers(appState: AppState): void {
             modeTemplateType: activeMode.templateType,
           });
           appState.applyAutoAnswerThresholds?.(activeMode.templateType);
+          appStateIntMgr.setRequirementsContext(activeMode.templateType === 'technical-interview');
         } else if (appStateIntMgr && !id) {
           appStateIntMgr.clearDynamicActionContext();
           // Mode cleared: back to the registry's no-mode Auto Answer bar
           // instead of keeping the previous mode's thresholds (review#10).
           appState.applyAutoAnswerThresholds?.(null);
+          appStateIntMgr.setRequirementsContext(false);
         }
       } catch {
         /* non-fatal */
@@ -19558,7 +19739,11 @@ export function initializeIpcHandlers(appState: AppState): void {
       // as gemini-chat-stream so Recap / Follow Up / What to Answer see phone turns.
       let context: string | undefined;
       try {
-        const snap = intelligenceManager.getFormattedContext(100);
+        // Phone doc-grounded turns strip prior assistant turns from the raw
+        // transcript; everything else gets the unified interview context.
+        const snap = phoneDocGrounded
+          ? intelligenceManager.getFormattedContext(100)
+          : intelligenceManager.getInterviewContextForChat();
         if (snap && snap.trim().length > 0) {
           context = phoneDocGrounded ? stripPriorAssistantTurns(snap) : snap;
           if (phoneDocGrounded && context.trim().length === 0) context = undefined;

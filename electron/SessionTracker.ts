@@ -132,6 +132,25 @@ export interface AssistantResponse {
     surface?: ConversationSurface;
 }
 
+export type InterviewPhase =
+    | 'behavioral'
+    | 'coding'
+    | 'system_design'
+    | 'candidate_qa'
+    | 'unknown';
+
+export type ActiveProblemType = 'coding' | 'system_design' | 'behavioral' | 'general';
+
+export interface ActiveProblem {
+    type: ActiveProblemType;
+    statement: string;
+    constraints: string[];
+    assumptions: string[];
+    source: 'screenshot' | 'transcript' | 'manual';
+    setAt: number;
+    phase: InterviewPhase;
+}
+
 export class SessionTracker {
     // Context management (mirrors Swift ContextManager)
     private contextItems: ContextItem[] = [];
@@ -219,6 +238,11 @@ export class SessionTracker {
     // reset); expires on its own after a quiet half hour.
     private activeDesign = createActiveDesignState();
 
+    // Structured active problem (P3) — archives previous on new question
+    private activeProblem: ActiveProblem | null = null;
+    private archivedProblems: ActiveProblem[] = [];
+    private currentPhase: InterviewPhase = 'unknown';
+
     // Rolling buffer for multi-segment interviewer question detection
     private recentInterviewerBuffer: { text: string; timestamp: number }[] = [];
     private static readonly INTERVIEWER_BUFFER_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
@@ -265,37 +289,120 @@ export class SessionTracker {
         const trimmed = question.trim();
         if (!trimmed) return;
 
-        if (this.detectedCodingQuestion === null) {
-            // Nothing stored — accept any source
+        const applyUpdate = () => {
             this.detectedCodingQuestion = trimmed;
             this.codingQuestionSource = source;
             this.codingQuestionSetAt = now;
+            this.setActiveProblem({
+                type: 'coding',
+                statement: trimmed,
+                constraints: [],
+                assumptions: [],
+                source,
+                setAt: now,
+                phase: this.currentPhase,
+            });
+        };
+
+        if (this.detectedCodingQuestion === null) {
+            applyUpdate();
             console.log(`[SessionTracker] Coding question stored`, { source, length: trimmed.length });
             return;
         }
 
         if (source === 'screenshot') {
-            // Screenshot always updates immediately (explicit user Solve action)
-            this.detectedCodingQuestion = trimmed;
-            this.codingQuestionSource = source;
-            this.codingQuestionSetAt = now;
+            applyUpdate();
             console.log(`[SessionTracker] Coding question updated via screenshot`, { length: trimmed.length });
             return;
         }
 
-        // source === 'transcript'
         const isStale = this.codingQuestionSetAt !== null
             && (now - this.codingQuestionSetAt) > SessionTracker.SCREENSHOT_STALE_MS;
         const canOverride = this.codingQuestionSource === 'transcript' || isStale;
 
         if (canOverride) {
-            this.detectedCodingQuestion = trimmed;
-            this.codingQuestionSource = source;
-            this.codingQuestionSetAt = now;
+            applyUpdate();
             console.log(`[SessionTracker] Coding question updated via transcript`, { source: this.codingQuestionSource, stale: isStale, length: trimmed.length });
         } else {
             console.log(`[SessionTracker] Transcript question ignored — screenshot question is recent (< ${SessionTracker.SCREENSHOT_STALE_MS / 1000}s)`);
         }
+    }
+
+    getCodingQuestionSetAt(): number | null {
+        return this.codingQuestionSetAt;
+    }
+
+    setActiveProblem(problem: ActiveProblem): void {
+        if (this.activeProblem && this.activeProblem.statement !== problem.statement) {
+            this.archivedProblems.push(this.activeProblem);
+            console.log('[SessionTracker] Archived previous active problem', {
+                archivedCount: this.archivedProblems.length,
+            });
+        }
+        this.activeProblem = problem;
+    }
+
+    getActiveProblem(): ActiveProblem | null {
+        return this.activeProblem;
+    }
+
+    updateActiveProblemConstraints(constraints: string[]): void {
+        if (!this.activeProblem) return;
+        this.activeProblem = {
+            ...this.activeProblem,
+            constraints: [...constraints],
+        };
+    }
+
+    ensureActiveProblemWithConstraints(
+        statement: string,
+        source: 'screenshot' | 'transcript',
+        constraints: string[],
+    ): void {
+        if (this.activeProblem) {
+            this.updateActiveProblemConstraints(constraints);
+            return;
+        }
+        this.setActiveProblem({
+            type: 'coding',
+            statement: statement.trim(),
+            constraints: [...constraints],
+            assumptions: [],
+            source,
+            setAt: Date.now(),
+            phase: this.currentPhase,
+        });
+    }
+
+    getArchivedProblems(): ActiveProblem[] {
+        return [...this.archivedProblems];
+    }
+
+    setInterviewPhase(phase: InterviewPhase): void {
+        this.currentPhase = phase;
+        if (this.activeProblem) {
+            this.activeProblem = { ...this.activeProblem, phase };
+        }
+    }
+
+    getInterviewPhase(): InterviewPhase {
+        return this.currentPhase;
+    }
+
+    /** Heuristic missed-opportunity log for debrief (v1). */
+    logMissedOpportunity(description: string, timestamp: number = Date.now()): void {
+        this.fullUsage.push({
+            type: 'missed_opportunity',
+            timestamp,
+            question: description,
+            answer: '',
+        });
+    }
+
+    getMissedOpportunities(): { description: string; timestamp: number }[] {
+        return this.fullUsage
+            .filter((u) => u.type === 'missed_opportunity')
+            .map((u) => ({ description: u.question, timestamp: u.timestamp }));
     }
 
     getDetectedCodingQuestion(): { question: string | null; source: 'screenshot' | 'transcript' | null; setAt: number | null } {
@@ -306,6 +413,7 @@ export class SessionTracker {
         this.detectedCodingQuestion = null;
         this.codingQuestionSource = null;
         this.codingQuestionSetAt = null;
+        this.activeProblem = null;
         this.recentInterviewerBuffer = [];
     }
 
@@ -323,6 +431,9 @@ export class SessionTracker {
         this.detectedCodingQuestion = null;
         this.codingQuestionSource = null;
         this.codingQuestionSetAt = null;
+        this.activeProblem = null;
+        this.archivedProblems = [];
+        this.currentPhase = 'unknown';
         this.recentInterviewerBuffer = [];
         this.lastAssistantMessage = null;
         this.assistantResponseHistory = [];

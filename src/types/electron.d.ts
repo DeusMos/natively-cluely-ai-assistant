@@ -118,6 +118,17 @@ export interface VisionModelState {
   inconclusive?: boolean
 }
 
+export interface LiveRequirementPayload {
+  id: string
+  text: string
+  status: 'candidate' | 'accepted' | 'dismissed'
+  source: 'extracted' | 'manual'
+  evidence: { speaker: string; quote: string; timestamp: number }
+  confidence: number
+  createdAt: number
+  acceptedAt?: number
+}
+
 export interface ElectronAPI {
   updateContentDimensions: (dimensions: {
     width: number
@@ -457,6 +468,12 @@ export interface ElectronAPI {
   ) => Promise<{ success: boolean; cancelled: boolean; error?: string }>
   onDirectAssistEvent: (callback: (event: DirectAssistEvent) => void) => () => void
   generateClarify: () => Promise<{ clarification: string | null }>
+  generateRestate: () => Promise<{ restatement: string | null }>
+  generateLookup: (focusTerm?: string) => Promise<{ explanation: string | null }>
+  generateLateJoinBackfill: () => Promise<{ summary: string | null }>
+  getMeetingBrief: (eventId?: string) => Promise<{ brief: string; eventId?: string | null; error?: string }>
+  onIntelligenceRestate?: (callback: (data: { restatement: string }) => void) => () => void
+  onIntelligenceLookup?: (callback: (data: { explanation: string }) => void) => () => void
   generateCodeHint: (imagePaths?: string[], problemStatement?: string) => Promise<{ hint: string | null }>
   generateBrainstorm: (imagePaths?: string[], problemStatement?: string) => Promise<{ script: string | null }>
   generateFollowUp: (intent: string, userRequest?: string) => Promise<{ refined: string | null; intent: string }>
@@ -817,6 +834,12 @@ export interface ElectronAPI {
   dismissDynamicAction: (actionId: string) => Promise<{ success: boolean; error?: string }>
   listDynamicActions: () => Promise<{ success: boolean; actions: DynamicActionPayload[]; error?: string }>
 
+  // Live Requirements List — technical-interview overlay.
+  onRequirementsUpdated: (callback: (data: { requirements: LiveRequirementPayload[] }) => void) => () => void
+  acceptRequirement: (id: string) => Promise<{ success: boolean; requirement?: LiveRequirementPayload; requirements?: LiveRequirementPayload[]; error?: string }>
+  dismissRequirement: (id: string) => Promise<{ success: boolean; requirements?: LiveRequirementPayload[]; error?: string }>
+  listRequirements: () => Promise<{ success: boolean; requirements: LiveRequirementPayload[]; error?: string }>
+
   // Intelligence Mode Events
   onIntelligenceAssistUpdate: (callback: (data: { insight: string }) => void) => () => void
   onIntelligenceSuggestedAnswerToken: (callback: (data: { token: string; question: string; confidence: number }) => void) => () => void
@@ -874,6 +897,17 @@ export interface ElectronAPI {
   onVisionCapabilityChanged: (callback: () => void) => () => void;
   toggleModelSelector: (coords: { x: number; y: number; activate?: boolean }) => Promise<void>;
   modelSelectorCloseIfOpen: () => Promise<void>;
+  createStickyNote: (payload: {
+    id: string;
+    text: string;
+    intent?: string;
+    x: number;
+    y: number;
+  }) => Promise<{ success: boolean }>;
+  getStickyNoteContent: (
+    id: string,
+  ) => Promise<{ id: string; text: string; intent?: string } | null>;
+  closeStickyNote: (id: string) => Promise<{ success: boolean }>;
   // NOTE: this interface and the one in electron/preload.ts are maintained
   // separately and drift. That drift is what hid the Ollama bug: the settings
   // screen reached these through a generic `invoke` that neither file declares

@@ -430,7 +430,10 @@ export class WindowHelper {
     const maxAllowedWidth = Math.floor(workArea.width * 0.9);
     const maxAllowedHeight = Math.floor(workArea.height * 0.9);
     const newWidth = Math.min(Math.max(width, 300), maxAllowedWidth); // min 300, max 90%
-    const newHeight = Math.min(Math.max(height, 1), maxAllowedHeight); // min 1, max 90%
+    const newHeight = Math.min(
+      Math.max(height, WindowHelper.OVERLAY_MIN_HEIGHT),
+      maxAllowedHeight,
+    );
     const maxX = workArea.x + workArea.width - newWidth;
     const maxY = workArea.y + workArea.height - newHeight;
     const newX = Math.min(Math.max(currentX, workArea.x), maxX);
@@ -483,7 +486,10 @@ export class WindowHelper {
     const maxAllowedWidth = Math.floor(workArea.width * 0.9);
     const maxAllowedHeight = Math.floor(workArea.height * 0.9);
     const newWidth = Math.min(Math.max(width, 300), maxAllowedWidth);
-    const newHeight = Math.min(Math.max(height, 1), maxAllowedHeight);
+    const newHeight = Math.min(
+      Math.max(height, WindowHelper.OVERLAY_MIN_HEIGHT),
+      maxAllowedHeight,
+    );
     traceOverlayResize('setOverlayDimensionsAnchored:request', {
       requested: { width, height },
       currentBounds,

@@ -661,6 +661,10 @@ interface ElectronAPI {
   onIntelligenceRecap: (callback: (data: { summary: string }) => void) => () => void;
   onIntelligenceClarify: (callback: (data: { clarification: string }) => void) => () => void;
   onIntelligenceClarifyToken: (callback: (data: { token: string }) => void) => () => void;
+  onIntelligenceRestate: (callback: (data: { restatement: string }) => void) => () => void;
+  onIntelligenceRestateToken: (callback: (data: { token: string }) => void) => () => void;
+  onIntelligenceLookup: (callback: (data: { explanation: string }) => void) => () => void;
+  onIntelligenceLookupToken: (callback: (data: { token: string }) => void) => () => void;
   onIntelligenceManualStarted: (callback: () => void) => () => void;
   onIntelligenceManualResult: (
     callback: (data: { answer: string; question: string }) => void,
@@ -676,7 +680,7 @@ interface ElectronAPI {
   // unused defense-in-depth bridges).
   onIntelligenceTokenBatch: (
     callback: (data: {
-      kind: 'suggested_answer' | 'refined_answer' | 'recap' | 'clarify' | 'follow_up_questions';
+      kind: 'suggested_answer' | 'refined_answer' | 'recap' | 'clarify' | 'restate' | 'lookup' | 'follow_up_questions';
       items: any[];
     }) => void,
   ) => () => void;
@@ -687,6 +691,17 @@ interface ElectronAPI {
   setDefaultModel: (modelId: string) => Promise<{ success: boolean; error?: string }>;
   toggleModelSelector: (coords: { x: number; y: number; activate?: boolean }) => Promise<void>;
   modelSelectorCloseIfOpen: () => Promise<void>;
+  createStickyNote: (payload: {
+    id: string;
+    text: string;
+    intent?: string;
+    x: number;
+    y: number;
+  }) => Promise<{ success: boolean }>;
+  getStickyNoteContent: (
+    id: string,
+  ) => Promise<{ id: string; text: string; intent?: string } | null>;
+  closeStickyNote: (id: string) => Promise<{ success: boolean }>;
   /** Returns the handler's real shape. This was declared `Promise<void>` while
    *  the handler has always returned `{ success }`, which is why the settings
    *  screen read `result.success` behind a @ts-ignore. */
@@ -2104,6 +2119,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     };
   },
   generateClarify: () => ipcRenderer.invoke('generate-clarify'),
+  generateRestate: () => ipcRenderer.invoke('generate-restate'),
+  generateLookup: (focusTerm?: string) => ipcRenderer.invoke('generate-lookup', focusTerm),
+  generateLateJoinBackfill: () => ipcRenderer.invoke('generate-late-join-backfill'),
+  getMeetingBrief: (eventId?: string) => ipcRenderer.invoke('get-meeting-brief', eventId),
   generateCodeHint: (imagePaths?: string[], problemStatement?: string) =>
     ipcRenderer.invoke('generate-code-hint', imagePaths, problemStatement),
   generateBrainstorm: (imagePaths?: string[], problemStatement?: string) =>
@@ -2323,6 +2342,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   dismissDynamicAction: (actionId: string) =>
     ipcRenderer.invoke('dynamic-action:dismiss', actionId),
   listDynamicActions: () => ipcRenderer.invoke('dynamic-action:list'),
+  onRequirementsUpdated: (callback: (data: { requirements: any[] }) => void) => {
+    const subscription = (_: any, data: any) => callback(data);
+    ipcRenderer.on('requirements-updated', subscription);
+    return () => {
+      ipcRenderer.removeListener('requirements-updated', subscription);
+    };
+  },
+  acceptRequirement: (id: string) => ipcRenderer.invoke('requirements:accept', id),
+  dismissRequirement: (id: string) => ipcRenderer.invoke('requirements:dismiss', id),
+  listRequirements: () => ipcRenderer.invoke('requirements:list'),
   onIntelligenceSuggestedAnswerToken: (
     callback: (data: { token: string; question: string; confidence: number }) => void,
   ) => {
@@ -2426,6 +2455,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('intelligence-clarify', subscription);
     return () => {
       ipcRenderer.removeListener('intelligence-clarify', subscription);
+    };
+  },
+  onIntelligenceRestateToken: (callback: (data: { token: string }) => void) => {
+    const subscription = (_: any, data: any) => callback(data);
+    ipcRenderer.on('intelligence-restate-token', subscription);
+    return () => {
+      ipcRenderer.removeListener('intelligence-restate-token', subscription);
+    };
+  },
+  onIntelligenceRestate: (callback: (data: { restatement: string }) => void) => {
+    const subscription = (_: any, data: any) => callback(data);
+    ipcRenderer.on('intelligence-restate', subscription);
+    return () => {
+      ipcRenderer.removeListener('intelligence-restate', subscription);
+    };
+  },
+  onIntelligenceLookupToken: (callback: (data: { token: string }) => void) => {
+    const subscription = (_: any, data: any) => callback(data);
+    ipcRenderer.on('intelligence-lookup-token', subscription);
+    return () => {
+      ipcRenderer.removeListener('intelligence-lookup-token', subscription);
+    };
+  },
+  onIntelligenceLookup: (callback: (data: { explanation: string }) => void) => {
+    const subscription = (_: any, data: any) => callback(data);
+    ipcRenderer.on('intelligence-lookup', subscription);
+    return () => {
+      ipcRenderer.removeListener('intelligence-lookup', subscription);
     };
   },
   onIntelligenceFollowUpQuestionsToken: (callback: (data: { token: string }) => void) => {
@@ -2539,6 +2596,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   toggleModelSelector: (coords: { x: number; y: number; activate?: boolean }) =>
     ipcRenderer.invoke('toggle-model-selector', coords),
   modelSelectorCloseIfOpen: () => ipcRenderer.invoke('model-selector:close-if-open'),
+  createStickyNote: (payload: {
+    id: string;
+    text: string;
+    intent?: string;
+    x: number;
+    y: number;
+  }) => ipcRenderer.invoke('sticky-note:create', payload),
+  getStickyNoteContent: (id: string) => ipcRenderer.invoke('sticky-note:get-content', id),
+  closeStickyNote: (id: string) => ipcRenderer.invoke('sticky-note:close', id),
   forceRestartOllama: () => ipcRenderer.invoke('force-restart-ollama'),
   isOllamaReachable: () => ipcRenderer.invoke('is-ollama-reachable'),
   ensureOllamaRunning: () => ipcRenderer.invoke('ensure-ollama-running'),

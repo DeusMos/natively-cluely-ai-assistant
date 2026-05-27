@@ -7,6 +7,7 @@ export interface ShortcutConfig {
     whatToAnswer: string[];
     autoAnswerMode: string[];
     clarify: string[];
+    askClarify: string[];
     followUp: string[];
     dynamicAction4: string[];
     answer: string[];
@@ -43,6 +44,7 @@ function buildDefaultShortcuts(): ShortcutConfig {
         whatToAnswer: [mod, '1'],
         autoAnswerMode: [mod, 'f'],
         clarify: [mod, '2'],
+        askClarify: [mod, shift, '2'],
         dynamicAction4: [mod, '3'],
         followUp: [mod, '4'],
         answer: [mod, '5'],
@@ -93,6 +95,7 @@ const BACKEND_ID_TO_ACTION: Partial<Record<string, keyof ShortcutConfig>> = {
     'chat:followUp': 'followUp',
     'chat:followup': 'followUp', // backwards compat
     'chat:clarify': 'clarify',
+    'chat:askClarify': 'askClarify',
     'chat:dynamicAction4': 'dynamicAction4',
     'chat:answer': 'answer',
     'chat:codeHint': 'codeHint',
@@ -291,6 +294,7 @@ export const useShortcuts = () => {
             case 'whatToAnswer': backendId = 'chat:whatToAnswer'; break;
             case 'autoAnswerMode': backendId = 'chat:auto-answer-mode'; break;
             case 'clarify': backendId = 'chat:clarify'; break;
+            case 'askClarify': backendId = 'chat:askClarify'; break;
             case 'followUp': backendId = 'chat:followUp'; break;
             case 'dynamicAction4': backendId = 'chat:dynamicAction4'; break;
             case 'answer': backendId = 'chat:answer'; break;

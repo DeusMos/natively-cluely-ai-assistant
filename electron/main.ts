@@ -1235,6 +1235,7 @@ import { shouldBlockLinuxSystemAudioAtMeetingStart } from './platform/linuxMeeti
 import { setCompositorWarningCallback } from './platform/x11Compositor';
 import { SettingsWindowHelper } from "./SettingsWindowHelper"
 import { ModelSelectorWindowHelper } from "./ModelSelectorWindowHelper"
+import { StickyNoteWindowHelper } from "./StickyNoteWindowHelper"
 import { CropperWindowHelper } from "./CropperWindowHelper"
 import { ScreenshotHelper } from "./ScreenshotHelper"
 import { KeybindManager } from "./services/KeybindManager"
@@ -1432,6 +1433,7 @@ export class AppState {
   private windowHelper: WindowHelper
   public settingsWindowHelper: SettingsWindowHelper
   public modelSelectorWindowHelper: ModelSelectorWindowHelper
+  public stickyNoteWindowHelper: StickyNoteWindowHelper
   public cropperWindowHelper: CropperWindowHelper
   private screenshotHelper: ScreenshotHelper
   public processingHelper: ProcessingHelper
@@ -1690,6 +1692,7 @@ export class AppState {
     this.windowHelper = new WindowHelper(this)
     this.settingsWindowHelper = new SettingsWindowHelper()
     this.modelSelectorWindowHelper = new ModelSelectorWindowHelper()
+    this.stickyNoteWindowHelper = new StickyNoteWindowHelper()
     this.cropperWindowHelper = new CropperWindowHelper()
 
     // 3. Initialize other helpers
@@ -1703,6 +1706,7 @@ export class AppState {
     this.windowHelper.setContentProtection(this.isUndetectable);
     this.settingsWindowHelper.setContentProtection(this.isUndetectable);
     this.modelSelectorWindowHelper.setContentProtection(this.isUndetectable);
+    this.stickyNoteWindowHelper.setContentProtection(this.isUndetectable);
     this.cropperWindowHelper.setContentProtection(this.isUndetectable);
 
     if (process.platform === 'win32' || process.platform === 'darwin') {
@@ -2133,6 +2137,7 @@ export class AppState {
         } else if (
           actionId === 'chat:whatToAnswer' ||
           actionId === 'chat:clarify' ||
+          actionId === 'chat:askClarify' ||
           actionId === 'chat:followUp' ||
           actionId === 'chat:answer' ||
           actionId === 'chat:codeHint' ||
@@ -2147,6 +2152,7 @@ export class AppState {
           const actionMap: Record<string, string> = {
             'chat:whatToAnswer': 'whatToAnswer',
             'chat:clarify': 'clarify',
+            'chat:askClarify': 'askClarify',
             'chat:followUp': 'followUp',
             'chat:answer': 'answer',
             'chat:codeHint': 'codeHint',
@@ -2187,6 +2193,7 @@ export class AppState {
     // Inject WindowHelper into other helpers
     this.settingsWindowHelper.setWindowHelper(this.windowHelper);
     this.modelSelectorWindowHelper.setWindowHelper(this.windowHelper);
+    this.stickyNoteWindowHelper.setWindowHelper(this.windowHelper);
 
 
 
@@ -6803,10 +6810,12 @@ export class AppState {
           modeTemplateType: activeMode.templateType,
         });
         this.applyAutoAnswerThresholds(activeMode.templateType);
+        this.intelligenceManager.setRequirementsContext(activeMode.templateType === 'technical-interview');
       } else {
         // No active mode: the registry's no-mode default (meeting bar), not
         // whatever the previous mode left behind (review#10).
         this.applyAutoAnswerThresholds(null);
+        this.intelligenceManager.setRequirementsContext(false);
       }
     } catch (err) {
       // Auxiliary feature — never block meeting start.
@@ -7055,6 +7064,7 @@ export class AppState {
     // the proctored test continues, and an activating show would blur the
     // test page. Normal mode is unchanged (active show + focus).
     this.windowHelper.setWindowMode('launcher', this.isUndetectable ? true : undefined);
+    this.stickyNoteWindowHelper.closeAll();
 
     // ─── CLEAR THE OVERLAY TREE WHILE IT IS HIDDEN ─────────────────────────
     // The overlay BrowserWindow is PERSISTENT — created once with show:false
@@ -7326,7 +7336,7 @@ export class AppState {
     // are NO LONGER USED for these 5 streams. The single
     // 'intelligence-token-batch' channel replaces them. The old channel
     // names + preload bridges are kept (defense-in-depth, no callers).
-    type BatchKind = 'suggested_answer' | 'refined_answer' | 'recap' | 'clarify' | 'follow_up_questions';
+    type BatchKind = 'suggested_answer' | 'refined_answer' | 'recap' | 'clarify' | 'restate' | 'lookup' | 'follow_up_questions';
     const tokenBatches = new Map<BatchKind, any[]>();
     let batchFlushScheduled = false;
     // The queued flush must be CANCELLABLE, and a manual flush must re-open the
@@ -7408,6 +7418,19 @@ export class AppState {
             confidence: action?.confidence,
             priority: action?.priority,
           },
+        });
+      } catch { /* non-fatal */ }
+    })
+
+    this.intelligenceManager.on('requirements_updated', (requirements: any[]) => {
+      const helper = this.getWindowHelper();
+      helper.getLauncherWindow()?.webContents.send('requirements-updated', { requirements });
+      helper.getOverlayWindow()?.webContents.send('requirements-updated', { requirements });
+      try {
+        const { telemetryService } = require('./services/telemetry/TelemetryService');
+        telemetryService.track({
+          name: 'requirement_extracted',
+          properties: { count: requirements?.length ?? 0 },
         });
       } catch { /* non-fatal */ }
     })
@@ -7510,6 +7533,30 @@ export class AppState {
     this.intelligenceManager.on('clarify_token', (token: string) => {
       // Sprint 9: batch.
       queueBatch('clarify', { token });
+    })
+
+    this.intelligenceManager.on('restate', (restatement: string) => {
+      flushBatchesBeforeFinal();
+      const win = mainWindow()
+      if (win) {
+        win.webContents.send('intelligence-restate', { restatement })
+      }
+    })
+
+    this.intelligenceManager.on('restate_token', (token: string) => {
+      queueBatch('restate', { token });
+    })
+
+    this.intelligenceManager.on('lookup', (explanation: string) => {
+      flushBatchesBeforeFinal();
+      const win = mainWindow()
+      if (win) {
+        win.webContents.send('intelligence-lookup', { explanation })
+      }
+    })
+
+    this.intelligenceManager.on('lookup_token', (token: string) => {
+      queueBatch('lookup', { token });
     })
 
     this.intelligenceManager.on('follow_up_questions_update', (questions: string) => {
@@ -8256,6 +8303,7 @@ export class AppState {
     this.windowHelper.setContentProtection(state)
     this.settingsWindowHelper.setContentProtection(state)
     this.modelSelectorWindowHelper.setContentProtection(state)
+    this.stickyNoteWindowHelper.setContentProtection(state)
     this.cropperWindowHelper.setContentProtection(state)
     foreignWindowCaptureGuard?.sync(state)
 

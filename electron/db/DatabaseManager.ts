@@ -48,6 +48,8 @@ export interface Meeting {
         speakerLabels?: SpeakerLabelMap;
         crossMeeting?: { carriedOpenQuestions?: Array<{ text: string; fromMeetingId: string; fromTitle: string }>; recurringRisks?: Array<{ text: string; fromMeetingId: string; fromTitle: string }>; stillOpen?: string[] };
         coachingInsights?: Array<{ id: string; type: string; title: string; detail: string; severity: 'info' | 'opportunity' | 'warning'; evidence?: string }>;
+        debrief?: string;
+        archivedProblems?: string[];
     };
     transcript?: Array<{
         speaker: string;
