@@ -1139,6 +1139,27 @@ interface ElectronAPI {
   onMeetingRetentionChanged: (
     callback: (retention: 'forever' | '7d' | '30d' | 'never') => void,
   ) => () => void;
+  getAudioSessionConfig: () => Promise<{
+    mode: 'video-call' | 'phone-call';
+    phoneCallCaptureSource: 'system' | 'mic';
+    phoneCallUserSpeakerTag: 0 | 1;
+  }>;
+  setAudioSessionConfig: (config: {
+    mode?: 'video-call' | 'phone-call';
+    phoneCallCaptureSource?: 'system' | 'mic';
+    phoneCallUserSpeakerTag?: 0 | 1;
+  }) => Promise<{ success: boolean; error?: string; config?: {
+    mode: 'video-call' | 'phone-call';
+    phoneCallCaptureSource: 'system' | 'mic';
+    phoneCallUserSpeakerTag: 0 | 1;
+  } }>;
+  onAudioSessionConfigChanged: (
+    callback: (config: {
+      mode: 'video-call' | 'phone-call';
+      phoneCallCaptureSource: 'system' | 'mic';
+      phoneCallUserSpeakerTag: 0 | 1;
+    }) => void,
+  ) => () => void;
   getProviderDataScopes: () => Promise<{
     transcript?: boolean;
     screenshots?: boolean;
@@ -3097,6 +3118,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('role-insight-progress', listener);
     return () => ipcRenderer.removeListener('role-insight-progress', listener);
   },
+  overlayGetContext: () => ipcRenderer.invoke('overlay:get-context'),
+  overlaySaveContext: (content: string) => ipcRenderer.invoke('overlay:save-context', content),
 
   // Tavily Search API
   setTavilyApiKey: (apiKey: string) => ipcRenderer.invoke('set-tavily-api-key', apiKey),
@@ -3178,6 +3201,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('meeting-retention-changed', subscription);
     return () => {
       ipcRenderer.removeListener('meeting-retention-changed', subscription);
+    };
+  },
+  getAudioSessionConfig: () => ipcRenderer.invoke('get-audio-session-config'),
+  setAudioSessionConfig: (config: {
+    mode?: 'video-call' | 'phone-call';
+    phoneCallCaptureSource?: 'system' | 'mic';
+    phoneCallUserSpeakerTag?: 0 | 1;
+  }) => ipcRenderer.invoke('set-audio-session-config', config),
+  onAudioSessionConfigChanged: (
+    callback: (config: {
+      mode: 'video-call' | 'phone-call';
+      phoneCallCaptureSource: 'system' | 'mic';
+      phoneCallUserSpeakerTag: 0 | 1;
+    }) => void,
+  ) => {
+    const subscription = (_: any, config: any) => callback(config);
+    ipcRenderer.on('audio-session-config-changed', subscription);
+    return () => {
+      ipcRenderer.removeListener('audio-session-config-changed', subscription);
     };
   },
   getProviderDataScopes: () => ipcRenderer.invoke('get-provider-data-scopes'),

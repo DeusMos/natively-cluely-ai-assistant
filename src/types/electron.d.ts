@@ -1114,6 +1114,8 @@ export interface ElectronAPI {
   profileGenerateCoverLetter: (force?: boolean) => Promise<{ success: boolean; letter?: any; error?: string }>
   profileGetNegotiationState: () => Promise<{ success: boolean; state?: any; isActive?: boolean; error?: string }>
   profileResetNegotiation: () => Promise<{ success: boolean; error?: string }>
+  overlayGetContext: () => Promise<{ success: boolean; content: string; error?: string }>
+  overlaySaveContext: (content: string) => Promise<{ success: boolean; error?: string }>
 
   // Tavily Search API
   setTavilyApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
@@ -1164,6 +1166,25 @@ export interface ElectronAPI {
   getMeetingRetention: () => Promise<'forever' | '7d' | '30d' | 'never'>;
   setMeetingRetention: (retention: 'forever' | '7d' | '30d' | 'never') => Promise<{ success: boolean; error?: string }>;
   onMeetingRetentionChanged: (callback: (retention: 'forever' | '7d' | '30d' | 'never') => void) => () => void;
+  getAudioSessionConfig: () => Promise<{
+    mode: 'video-call' | 'phone-call';
+    phoneCallCaptureSource: 'system' | 'mic';
+    phoneCallUserSpeakerTag: 0 | 1;
+  }>;
+  setAudioSessionConfig: (config: {
+    mode?: 'video-call' | 'phone-call';
+    phoneCallCaptureSource?: 'system' | 'mic';
+    phoneCallUserSpeakerTag?: 0 | 1;
+  }) => Promise<{ success: boolean; error?: string; config?: {
+    mode: 'video-call' | 'phone-call';
+    phoneCallCaptureSource: 'system' | 'mic';
+    phoneCallUserSpeakerTag: 0 | 1;
+  } }>;
+  onAudioSessionConfigChanged: (callback: (config: {
+    mode: 'video-call' | 'phone-call';
+    phoneCallCaptureSource: 'system' | 'mic';
+    phoneCallUserSpeakerTag: 0 | 1;
+  }) => void) => () => void;
   getProviderDataScopes: () => Promise<{ transcript?: boolean; screenshots?: boolean; reference_files?: boolean; profile_history?: boolean; embeddings?: boolean; post_call_summary?: boolean }>;
   setProviderDataScopes: (scopes: { transcript?: boolean; screenshots?: boolean; reference_files?: boolean; profile_history?: boolean; embeddings?: boolean; post_call_summary?: boolean }) => Promise<{ success: boolean; error?: string }>;
   onProviderDataScopesChanged: (callback: (scopes: { transcript?: boolean; screenshots?: boolean; reference_files?: boolean; profile_history?: boolean; embeddings?: boolean; post_call_summary?: boolean }) => void) => () => void;

@@ -520,6 +520,8 @@ pub struct MicrophoneCapture {
     native_sample_rate: Arc<AtomicU32>,
     /// Stores the requested device ID for recreation on restart.
     device_id: Option<String>,
+    /// When true, use permissive suppression for phone-on-speaker pickup.
+    phone_speaker_mode: bool,
     /// Holds the live CPAL stream. Recreated on each start().
     input: Option<microphone::MicrophoneStream>,
 }
@@ -527,7 +529,7 @@ pub struct MicrophoneCapture {
 #[napi]
 impl MicrophoneCapture {
     #[napi(constructor)]
-    pub fn new(device_id: Option<String>) -> napi::Result<Self> {
+    pub fn new(device_id: Option<String>, phone_speaker_mode: Option<bool>) -> napi::Result<Self> {
         // Eagerly create the stream to detect device errors early and read the
         // native sample rate.
         let input = match microphone::MicrophoneStream::new(device_id.clone()) {
@@ -550,6 +552,7 @@ impl MicrophoneCapture {
             sample_rate: Arc::new(AtomicU32::new(emitted_rate)),
             native_sample_rate: Arc::new(AtomicU32::new(native_rate)),
             device_id,
+            phone_speaker_mode: phone_speaker_mode.unwrap_or(false),
             input: Some(input),
         })
     }
@@ -624,6 +627,7 @@ impl MicrophoneCapture {
         // CPAL callback-thread errors (USB unplug, device reset, exclusive-
         // mode steal) to the JS layer instead of just logging to stderr.
         let err_signal = input_ref.err_signal();
+        let phone_speaker_mode = self.phone_speaker_mode;
 
         // DSP thread with silence suppression + WebRTC VAD
         self.capture_thread = Some(thread::spawn(move || {
@@ -643,9 +647,14 @@ impl MicrophoneCapture {
             };
             let emitted_rate = if resampler.is_some() { CANONICAL_STT_RATE } else { native_rate };
 
+            let suppression_base = if phone_speaker_mode {
+                SilenceSuppressionConfig::for_phone_speaker()
+            } else {
+                SilenceSuppressionConfig::for_microphone()
+            };
             let mut suppressor = SilenceSuppressor::new(SilenceSuppressionConfig {
                 native_sample_rate: emitted_rate,
-                ..SilenceSuppressionConfig::for_microphone()
+                ..suppression_base
             });
 
             // 20ms chunks at the EMITTED rate (320 samples at 16kHz).
@@ -657,7 +666,14 @@ impl MicrophoneCapture {
             // PERF: coalesce up to CHUNK_BATCH_COUNT frames into one tsfn call.
             let mut emitter = BatchEmitter::new(chunk_size * 2);
 
-            println!("[MicrophoneCapture] DSP thread started (VAD + suppression active, native={}Hz, emitted={}Hz, chunk={})", native_rate, emitted_rate, chunk_size);
+            if phone_speaker_mode {
+                println!(
+                    "[MicrophoneCapture] Phone-speaker mode: permissive RMS gate, VAD disabled (native={}Hz, emitted={}Hz, chunk={})",
+                    native_rate, emitted_rate, chunk_size
+                );
+            } else {
+                println!("[MicrophoneCapture] DSP thread started (VAD + suppression active, native={}Hz, emitted={}Hz, chunk={})", native_rate, emitted_rate, chunk_size);
+            }
 
             loop {
                 if stop_signal.load(Ordering::Relaxed) {

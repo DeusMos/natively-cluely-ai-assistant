@@ -44,10 +44,12 @@ export class MicrophoneCapture extends EventEmitter {
     // subsequent meeting benefits from pre-warm (preWarmEnabled flips to true
     // inside start() after a successful monitor.start).
     private preWarmEnabled: boolean = false;
+    private phoneSpeakerMode: boolean = false;
 
-    constructor(deviceId?: string | null) {
+    constructor(deviceId?: string | null, phoneSpeakerMode?: boolean) {
         super();
         this.deviceId = deviceId || null;
+        this.phoneSpeakerMode = phoneSpeakerMode ?? false;
         if (!RustMicCapture) {
             console.error('[MicrophoneCapture] Rust class implementation not found.');
         } else {
@@ -56,7 +58,7 @@ export class MicrophoneCapture extends EventEmitter {
             // indicator — even though no meeting has started. Construction is
             // deferred to start() (when the user actually needs capture) and to
             // the gated post-stop() pre-warm path.
-            console.log(`[MicrophoneCapture] Initialized wrapper (lazy). Device ID: ${this.deviceId || 'default'}`);
+            console.log(`[MicrophoneCapture] Initialized wrapper (lazy). Device ID: ${this.deviceId || 'default'}${this.phoneSpeakerMode ? ' (phone-speaker mode)' : ''}`);
         }
     }
 
@@ -157,7 +159,7 @@ export class MicrophoneCapture extends EventEmitter {
         if (!this.monitor) {
             console.log('[MicrophoneCapture] Constructing native monitor (lazy start-time init)...');
             try {
-                this.monitor = new RustMicCapture(this.deviceId);
+                this.monitor = new RustMicCapture(this.deviceId, this.phoneSpeakerMode);
             } catch (e) {
                 this.emit('error', e);
                 // Preserve the pre-lazy-init contract: native construction
@@ -321,7 +323,7 @@ export class MicrophoneCapture extends EventEmitter {
             if (this.monitor) return;  // start() raced ahead and already grabbed a fresh handle
             try {
                 console.log('[MicrophoneCapture] Pre-warming native monitor for next meeting...');
-                this.monitor = new RustMicCapture(this.deviceId);
+                this.monitor = new RustMicCapture(this.deviceId, this.phoneSpeakerMode);
             } catch (e) {
                 // Emit a structured event so observers (main.ts handles
                 // 'error', AudioRecovery, telemetry) see the failure

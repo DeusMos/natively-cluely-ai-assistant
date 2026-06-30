@@ -1277,6 +1277,7 @@ type STTProvider = (GoogleSTT | RestSTT | DeepgramStreamingSTT | SonioxStreaming
   finalize?: () => void | boolean;
   setAudioChannelCount?: (count: number) => void;
   notifySpeechEnded?: () => void;
+  setDiarizationEnabled?: (enabled: boolean) => void;
 };
 
 type ScreenshotWindowMode = 'launcher' | 'overlay';
@@ -2228,6 +2229,14 @@ export class AppState {
         serviceTier: settingsManager.get('codexCliServiceTier'),
         modelReasoningEffort: settingsManager.get('codexCliModelReasoningEffort'),
       });
+      // Restore overlay context editor content
+      try {
+        const savedOverlayContext = DatabaseManager.getInstance().getOverlayContext();
+        if (savedOverlayContext) {
+          llmHelper.setOverlayContext(savedOverlayContext);
+          this.intelligenceManager.setOverlayContext(savedOverlayContext);
+        }
+      } catch (_) {}
     }
 
     // Initialize RAGManager (requires database to be ready)
@@ -3602,7 +3611,72 @@ export class AppState {
   public disposeAutoAnswerForShutdown(): void {
   }
 
-  private createSTTProvider(speaker: 'interviewer' | 'user'): STTProvider | null {
+  /** Tracks which audio session mode the current STT instances were built for. */
+  private _sttBuiltForMode: 'video-call' | 'phone-call' | null = null;
+
+  /** Tracks whether the live mic capture was opened in phone-speaker suppression mode. */
+  private _micPhoneSpeakerMode: boolean | null = null;
+
+  private isPhoneCallMode(): boolean {
+    return SettingsManager.getInstance().get('audioSessionMode') === 'phone-call';
+  }
+
+  private getPhoneCallCaptureSource(): 'system' | 'mic' {
+    const source = SettingsManager.getInstance().get('phoneCallCaptureSource');
+    return source === 'mic' ? 'mic' : 'system';
+  }
+
+  /** Map a diarization tag to user vs interviewer based on user settings. Tags are 0-based (both providers normalize before emit). */
+  private mapDiarizedSpeakerTag(tag: number): 'user' | 'interviewer' {
+    const userTag = SettingsManager.getInstance().get('phoneCallUserSpeakerTag') ?? 1;
+    return tag === userTag ? 'user' : 'interviewer';
+  }
+
+  private sttSupportsDiarization(stt: STTProvider): boolean {
+    return typeof stt.setDiarizationEnabled === 'function';
+  }
+
+  /** Tear down STT when audio session mode changed (e.g. video-call ↔ phone-call). */
+  private resetSttForAudioSessionChange(): void {
+    const targetMode = this.isPhoneCallMode() ? 'phone-call' : 'video-call';
+    const phoneOk = targetMode === 'phone-call' && this.googleSTT && !this.googleSTT_User;
+    const videoOk = targetMode === 'video-call' && this.googleSTT && this.googleSTT_User;
+    if (this._sttBuiltForMode === targetMode && (phoneOk || videoOk)) {
+      return;
+    }
+
+    console.log(
+      `[Main] Resetting STT for audio session change (was=${this._sttBuiltForMode ?? 'none'}, want=${targetMode})`,
+    );
+
+    if (this.googleSTT) {
+      this.googleSTT.stop();
+      this.googleSTT.removeAllListeners();
+      this.googleSTT = null;
+    }
+    if (this.googleSTT_User) {
+      this.googleSTT_User.stop();
+      this.googleSTT_User.removeAllListeners();
+      this.googleSTT_User = null;
+    }
+    this._sttBuiltForMode = null;
+    this._sysSttRateApplied = false;
+    this._micSttRateApplied = false;
+  }
+
+  public async reconfigureSttForAudioSession(): Promise<void> {
+    this.resetSttForAudioSessionChange();
+    if (!this.isMeetingActive) return;
+    await this.setupSystemAudioPipeline();
+    // Captures/STT a phone-call source does not need are never built, so the
+    // shared per-channel start covers both modes.
+    this.startCaptureChannels('reconfigureSttForAudioSession');
+  }
+
+  private createSTTProvider(
+    speaker: 'interviewer' | 'user',
+    options?: { diarize?: boolean },
+  ): STTProvider | null {
     const { CredentialsManager } = require('./services/CredentialsManager');
     const sttProvider = CredentialsManager.getInstance().getSttProvider();
     const sttLanguage = CredentialsManager.getInstance().getSttLanguage();
@@ -3751,6 +3825,17 @@ export class AppState {
       stt = new GoogleSTT(speaker);
     }
 
+    const wantsDiarization = options?.diarize === true;
+    if (wantsDiarization && !this.sttSupportsDiarization(stt)) {
+      console.warn(
+        `[Main] STT provider "${sttProvider}" does not support speaker diarization — falling back to Google STT for phone call mode`,
+      );
+      stt = new GoogleSTT('phone-diarized');
+    }
+    if (wantsDiarization) {
+      stt.setDiarizationEnabled?.(true);
+    }
+
     stt.setRecognitionLanguage(sttLanguage);
 
     // WTA audit F9 (2026-08-18): effective provider id for punctuation
@@ -3797,7 +3882,7 @@ export class AppState {
     }
 
     // Wire Transcript Events
-    stt.on('transcript', (segment: { text: string, isFinal: boolean, confidence: number, speakerId?: string }) => {
+    stt.on('transcript', (segment: { text: string, isFinal: boolean, confidence: number, speakerId?: string, speakerTag?: number }) => {
       // Accept transcripts while a meeting is active OR while we're draining
       // trailing finals after Stop. `_isDraining` covers the ~250 ms grace
       // window between Stop click and STT socket close so the user's last
@@ -3806,8 +3891,20 @@ export class AppState {
         return;
       }
 
+      const effectiveSpeaker =
+        segment.speakerTag !== undefined
+          ? this.mapDiarizedSpeakerTag(segment.speakerTag)
+          : (this.isPhoneCallMode() ? 'interviewer' : speaker);
+
+      if (this.isPhoneCallMode() && segment.speakerTag === undefined && segment.isFinal) {
+        console.warn(
+          `[Main] Phone-call mode transcript without speaker tag — labeled as interviewer. ` +
+          `Enable Deepgram/Google diarization or swap the "Which speaker is you" setting.`,
+        );
+      }
+
       this.intelligenceManager.handleTranscript({
-        speaker: speaker,
+        speaker: effectiveSpeaker,
         ...(segment.speakerId ? { speakerId: segment.speakerId } : {}),
         text: segment.text,
         timestamp: Date.now(),
@@ -3849,14 +3946,14 @@ export class AppState {
       // Feed final transcript to JIT RAG indexer
       if (segment.isFinal && this.ragManager) {
         this.ragManager.feedLiveTranscript([{
-          speaker: speaker,
+          speaker: effectiveSpeaker,
           text: segment.text,
           timestamp: Date.now()
         }]);
       }
 
       const payload = {
-        speaker: speaker,
+        speaker: effectiveSpeaker,
         ...(segment.speakerId ? { speakerId: segment.speakerId } : {}),
         text: segment.text,
         timestamp: Date.now(),
@@ -3874,7 +3971,7 @@ export class AppState {
       // in LLMHelper is the primary defense; gating at the source stops state
       // from carrying over to any future read site. Fails open if ModesManager
       // is unavailable.
-      if (segment.isFinal && speaker === 'interviewer') {
+      if (segment.isFinal && effectiveSpeaker === 'interviewer') {
         let trackerFeedAllowed = true;
         try {
           const { ModesManager } = require('./services/ModesManager');
@@ -4250,11 +4347,13 @@ export class AppState {
         stuckTimer = null;
       }
       if (!this._sysSttRateApplied && this.googleSTT && this.systemAudioCapture === capture) {
-        const rate = capture.getSampleRate();
-        this.googleSTT.setSampleRate(rate);
-        this.googleSTT.setAudioChannelCount?.(1);
-        this._sysSttRateApplied = true;
-        console.log(`${prefix}Interviewer STT rate locked from first chunk: ${rate}Hz`);
+        if (!(this.isPhoneCallMode() && this.getPhoneCallCaptureSource() !== 'system')) {
+          const rate = capture.getSampleRate();
+          this.googleSTT.setSampleRate(rate);
+          this.googleSTT.setAudioChannelCount?.(1);
+          this._sysSttRateApplied = true;
+          console.log(`${prefix}Interviewer STT rate locked from first chunk: ${rate}Hz`);
+        }
       }
       if (chunkCount <= 3 || chunkCount % 500 === 0) {
         console.log(`${prefix}SystemAudio->STT: chunk #${chunkCount}, ${chunk.length}B, googleSTT=${this.googleSTT ? 'active' : 'NULL'}`);
@@ -4268,7 +4367,10 @@ export class AppState {
       // interleaved with the owner's audio it garbles the interviewer
       // transcript (F-102).
       if (this.systemAudioCapture === capture) {
-        this.googleSTT?.write(chunk);
+        // Phone call with mic as the source: system audio is not transcribed.
+        if (!(this.isPhoneCallMode() && this.getPhoneCallCaptureSource() !== 'system')) {
+          this.googleSTT?.write(chunk);
+        }
         // Smart Turn ring buffer (256 KB, interviewer channel only). Cheap
         // int16 copy; skipped entirely while Auto Answer is off.
       }
@@ -4276,12 +4378,16 @@ export class AppState {
     capture.on('sample_rate_changed', (rate: number) => {
       console.log(`${prefix}SystemAudioCapture rate updated dynamically to ${rate}Hz`);
       if (this.systemAudioCapture === capture) {
-        this.googleSTT?.setSampleRate(rate);
+        if (!(this.isPhoneCallMode() && this.getPhoneCallCaptureSource() !== 'system')) {
+          this.googleSTT?.setSampleRate(rate);
+        }
       }
     });
     capture.on('speech_ended', () => {
       if (this.systemAudioCapture === capture) {
-        this.googleSTT?.notifySpeechEnded?.();
+        if (!(this.isPhoneCallMode() && this.getPhoneCallCaptureSource() !== 'system')) {
+          this.googleSTT?.notifySpeechEnded?.();
+        }
         // Auto Answer: the local VAD saw the interviewer stop. For a provider
         // with no end-of-turn event of its own this is the only early signal;
         // the controller guards against a half-transcribed turn by ignoring the
@@ -4388,12 +4494,21 @@ export class AppState {
         clearTimeout(stuckTimer);
         stuckTimer = null;
       }
-      if (!this._micSttRateApplied && this.googleSTT_User && this.microphoneCapture === capture) {
+      if (!this._micSttRateApplied && this.microphoneCapture === capture) {
         const rate = capture.getSampleRate();
-        this.googleSTT_User.setSampleRate(rate);
-        this.googleSTT_User.setAudioChannelCount?.(1);
-        this._micSttRateApplied = true;
-        console.log(`${prefix}User STT rate locked from first mic chunk: ${rate}Hz`);
+        if (this.isPhoneCallMode()) {
+          if (this.getPhoneCallCaptureSource() === 'mic' && this.googleSTT) {
+            this.googleSTT.setSampleRate(rate);
+            this.googleSTT.setAudioChannelCount?.(1);
+            this._micSttRateApplied = true;
+            console.log(`${prefix}Phone-call STT rate locked from first mic chunk: ${rate}Hz`);
+          }
+        } else if (this.googleSTT_User) {
+          this.googleSTT_User.setSampleRate(rate);
+          this.googleSTT_User.setAudioChannelCount?.(1);
+          this._micSttRateApplied = true;
+          console.log(`${prefix}User STT rate locked from first mic chunk: ${rate}Hz`);
+        }
       }
 
       // HFP-degradation backstop. The proactive reconfigureAudio check handles
@@ -4487,18 +4602,30 @@ export class AppState {
       // path (F-102): only the capture that owns this.microphoneCapture may
       // feed the user STT socket.
       if (this.microphoneCapture === capture) {
-        this.googleSTT_User?.write(chunk);
+        if (this.isPhoneCallMode()) {
+          if (this.getPhoneCallCaptureSource() === 'mic') this.googleSTT?.write(chunk);
+        } else {
+          this.googleSTT_User?.write(chunk);
+        }
       }
     });
     capture.on('sample_rate_changed', (rate: number) => {
       console.log(`${prefix}MicrophoneCapture rate updated dynamically to ${rate}Hz`);
       if (this.microphoneCapture === capture) {
-        this.googleSTT_User?.setSampleRate(rate);
+        if (this.isPhoneCallMode()) {
+          if (this.getPhoneCallCaptureSource() === 'mic') this.googleSTT?.setSampleRate(rate);
+        } else {
+          this.googleSTT_User?.setSampleRate(rate);
+        }
       }
     });
     capture.on('speech_ended', () => {
       if (this.microphoneCapture === capture) {
-        this.googleSTT_User?.notifySpeechEnded?.();
+        if (this.isPhoneCallMode()) {
+          if (this.getPhoneCallCaptureSource() === 'mic') this.googleSTT?.notifySpeechEnded?.();
+        } else {
+          this.googleSTT_User?.notifySpeechEnded?.();
+        }
       }
     });
     capture.on('speech_edge', (edge: SpeechEdge) => {
@@ -4507,8 +4634,21 @@ export class AppState {
     this.setupMicRecoveryHandler();
   }
 
+  private createMicrophoneCapture(deviceId?: string | null): MicrophoneCapture {
+    const phoneSpeaker =
+      this.isPhoneCallMode() && this.getPhoneCallCaptureSource() === 'mic';
+    return new MicrophoneCapture(deviceId, phoneSpeaker);
+  }
+
   private async setupSystemAudioPipeline(): Promise<void> {
     // REMOVED EARLY RETURN: if (this.systemAudioCapture && this.microphoneCapture) return; // Already initialized
+
+    this.resetSttForAudioSessionChange();
+
+    const phoneMode = this.isPhoneCallMode();
+    const phoneSource = this.getPhoneCallCaptureSource();
+    const needsSystemCapture = !phoneMode || phoneSource === 'system';
+    const needsMicCapture = !phoneMode || phoneSource === 'mic';
 
     try {
       // 1. Initialize Captures if missing
@@ -4566,7 +4706,7 @@ export class AppState {
           this.systemAudioCapture = null;
           this._sysSttRateApplied = false;
         }
-      } else if (!this.systemAudioCapture) {
+      } else if (needsSystemCapture && !this.systemAudioCapture) {
         // B3: wrap construction + wiring in its own try/catch so a native-module
         // failure (NAPI throw, HAL/WASAPI resource exhaustion, internal error
         // from SystemAudioCapture ctor) doesn't silently leave systemAudioCapture
@@ -4606,24 +4746,44 @@ export class AppState {
       // existing wrapper is assumed correct (its watchdogs will detect any
       // zero-fill or stuck state and surface via audio-capture-failed).
 
-      if (!this.microphoneCapture) {
-        // B3: same defense for mic ctor throws (USB device disappears on open,
-        // exclusive-mode steal). Outer try/catch only logged; user got no banner.
-        try {
-          this.microphoneCapture = new MicrophoneCapture();
-          this.wireMicCapture(this.microphoneCapture);
-        } catch (capErr) {
-          console.error('[Main] MicrophoneCapture construction failed:', capErr);
+      if (needsMicCapture) {
+        const wantPhoneSpeaker = phoneMode && phoneSource === 'mic';
+        if (
+          this.microphoneCapture &&
+          this._micPhoneSpeakerMode !== null &&
+          this._micPhoneSpeakerMode !== wantPhoneSpeaker
+        ) {
+          console.log(
+            `[Main] Recreating MicrophoneCapture — phone-speaker mode changed (${this._micPhoneSpeakerMode} → ${wantPhoneSpeaker})`,
+          );
+          await this.microphoneCapture.destroy();
           this.microphoneCapture = null;
-          this.sendAudioCaptureFailed({
-            channel: 'mic',
-            message: 'The microphone could not be opened. Check it is connected and free, then restart Natively.',
-            attempt: 0,
-            maxAttempts: 0,
-            terminal: true,
-            stuck: false,
-          });
+          this._micPhoneSpeakerMode = null;
         }
+        if (!this.microphoneCapture) {
+          // B3: same defense for mic ctor throws (USB device disappears on open,
+          // exclusive-mode steal). Outer try/catch only logged; user got no banner.
+          try {
+            this.microphoneCapture = this.createMicrophoneCapture();
+            this._micPhoneSpeakerMode = wantPhoneSpeaker;
+            this.wireMicCapture(this.microphoneCapture);
+          } catch (capErr) {
+            console.error('[Main] MicrophoneCapture construction failed:', capErr);
+            this.microphoneCapture = null;
+            this.sendAudioCaptureFailed({
+              channel: 'mic',
+              message: 'The microphone could not be opened. Check it is connected and free, then restart Natively.',
+              attempt: 0,
+              maxAttempts: 0,
+              terminal: true,
+              stuck: false,
+            });
+          }
+        }
+      } else if (this.microphoneCapture) {
+        await this.microphoneCapture.destroy();
+        this.microphoneCapture = null;
+        this._micPhoneSpeakerMode = null;
       }
 
       // 2. Initialize STT Services if missing
@@ -4634,10 +4794,13 @@ export class AppState {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const sttProv = CredentialsManager.getInstance().getSttProvider();
 
-      if (!this.googleSTT) {
-        console.log(`[Main] Creating interviewer STT provider: ${sttProv}`);
+        if (!this.googleSTT) {
+        console.log(`[Main] Creating ${phoneMode ? 'diarized phone-call' : 'interviewer'} STT provider: ${sttProv}`);
         try {
-          this.googleSTT = this.createSTTProvider('interviewer');
+          this.googleSTT = this.createSTTProvider('interviewer', phoneMode ? { diarize: true } : undefined);
+          if (this.googleSTT) {
+            this._sttBuiltForMode = phoneMode ? 'phone-call' : 'video-call';
+          }
         } catch (sttErr) {
           console.error(`[Main] Interviewer STT init failed (${sttProv}):`, sttErr);
           this.googleSTT = null;
@@ -4650,19 +4813,30 @@ export class AppState {
         if (!this.googleSTT && sttProv !== 'none') {
           this.sendAudioCaptureFailed( {
             channel: 'system',
-            message: `Speech-to-text provider "${sttProv}" could not start for system audio. Check its API key in Settings.`,
+            message: phoneMode
+              ? `Phone call mode requires Deepgram or Google STT with speaker diarization. Provider "${sttProv}" could not start. Check its API key in Settings.`
+              : `Speech-to-text provider "${sttProv}" could not start for system audio. Check its API key in Settings.`,
             attempt: 0,
             maxAttempts: 0,
             terminal: true,
             stuck: false,
           });
+        } else if (phoneMode) {
+          this.broadcast('audio-session-mode', {
+            mode: 'phone-call',
+            captureSource: phoneSource,
+            userSpeakerTag: SettingsManager.getInstance().get('phoneCallUserSpeakerTag') ?? 1,
+          });
         }
       }
 
-      if (!this.googleSTT_User) {
+      if (!phoneMode && !this.googleSTT_User) {
         console.log(`[Main] Creating user STT provider: ${sttProv}`);
         try {
           this.googleSTT_User = this.createSTTProvider('user');
+          if (this.googleSTT_User) {
+            this._sttBuiltForMode = 'video-call';
+          }
         } catch (sttErr) {
           console.error(`[Main] User STT init failed (${sttProv}):`, sttErr);
           this.googleSTT_User = null;
@@ -4710,6 +4884,19 @@ export class AppState {
    * prevent duplicate construction.
    */
   public prewarmSttProviders(): void {
+    const phoneMode = this.isPhoneCallMode();
+    this.resetSttForAudioSessionChange();
+    if (phoneMode) {
+      if (this.googleSTT) return;
+      try {
+        console.log('[Main] Pre-warming diarized phone-call STT provider...');
+        this.googleSTT = this.createSTTProvider('interviewer', { diarize: true });
+        if (this.googleSTT) this._sttBuiltForMode = 'phone-call';
+      } catch (err) {
+        console.warn('[Main] Phone-call STT pre-warm failed (will retry on meeting start):', err);
+      }
+      return;
+    }
     if (this.googleSTT && this.googleSTT_User) return;
     try {
       if (!this.googleSTT) {
@@ -4719,6 +4906,9 @@ export class AppState {
       if (!this.googleSTT_User) {
         console.log('[Main] Pre-warming user STT provider...');
         this.googleSTT_User = this.createSTTProvider('user');
+      }
+      if (this.googleSTT && this.googleSTT_User) {
+        this._sttBuiltForMode = 'video-call';
       }
     } catch (err) {
       // Pre-warm failure is non-fatal; setupSystemAudioPipeline will retry on
@@ -4813,7 +5003,7 @@ export class AppState {
       this.microphoneCapture = null;
     }
     try {
-      this.microphoneCapture = new MicrophoneCapture(this._lastRequestedInputDeviceId);
+      this.microphoneCapture = this.createMicrophoneCapture(this._lastRequestedInputDeviceId);
       this._micSttRateApplied = false;
       this.wireMicCapture(this.microphoneCapture, '(Resume)');
       this.microphoneCapture.start();
@@ -4884,16 +5074,18 @@ export class AppState {
     // failed createSTTProvider leaves the field null and the capture's `?.write`
     // becomes a no-op rather than throwing. We only recreate ones we nulled, so
     // there is no risk of double-starting an existing provider.
+    // Phone-call mode runs one diarized STT for both speakers and no user STT.
+    const phoneMode = this.isPhoneCallMode();
     if (!this.googleSTT) {
       try {
-        this.googleSTT = this.createSTTProvider('interviewer');
+        this.googleSTT = this.createSTTProvider('interviewer', phoneMode ? { diarize: true } : undefined);
         this.googleSTT?.start();
       } catch (sttErr) {
         console.error('[Main] Resume: interviewer STT recreate failed:', sttErr);
         this.googleSTT = null;
       }
     }
-    if (!this.googleSTT_User) {
+    if (!phoneMode && !this.googleSTT_User) {
       try {
         this.googleSTT_User = this.createSTTProvider('user');
         this.googleSTT_User?.start();
@@ -5335,7 +5527,7 @@ export class AppState {
 
     try {
       console.log('[Main] Initializing MicrophoneCapture...');
-      this.microphoneCapture = new MicrophoneCapture(wantedInput);
+      this.microphoneCapture = this.createMicrophoneCapture(wantedInput);
       this._micSttRateApplied = false;
       this.wireMicCapture(this.microphoneCapture, '(Reconfigured)');
       console.log('[Main] MicrophoneCapture initialized.');
@@ -5361,7 +5553,7 @@ export class AppState {
       // failure case, so removing it is a separate change, not a cleanup.
       console.warn('[Main] Failed to initialize MicrophoneCapture with preferred ID. Falling back to default.', err);
       try {
-        this.microphoneCapture = new MicrophoneCapture(); // Default
+        this.microphoneCapture = this.createMicrophoneCapture(); // Default
         this._micSttRateApplied = false;
         this.wireMicCapture(this.microphoneCapture, '(Default)');
         this.broadcastDeviceSelection({
@@ -5391,7 +5583,7 @@ export class AppState {
         for (const candidateId of candidates) {
           try {
             console.log(`[Main] Trying mic fallback candidate: ${candidateId}`);
-            this.microphoneCapture = new MicrophoneCapture(candidateId);
+            this.microphoneCapture = this.createMicrophoneCapture(candidateId);
             this._micSttRateApplied = false;
             this.wireMicCapture(this.microphoneCapture, `(Fallback:${candidateId})`);
             this.broadcastDeviceSelection({
@@ -5541,6 +5733,7 @@ export class AppState {
       this.googleSTT_User.removeAllListeners();
       this.googleSTT_User = null;
     }
+    this._sttBuiltForMode = null;
 
     // Only reinitialize the pipeline when a meeting is already active.
     // Outside a meeting, defer pipeline creation to startMeeting() so we never
@@ -6200,7 +6393,7 @@ export class AppState {
               }
               this._micSttRateApplied = false;
 
-              this.microphoneCapture = new MicrophoneCapture(this._lastRequestedInputDeviceId);
+              this.microphoneCapture = this.createMicrophoneCapture(this._lastRequestedInputDeviceId);
 
               // Use the canonical wiring path (wireMicCapture) instead of hand-rolling
               // data/sample_rate_changed/speech_ended. Hand-rolled wiring drifts: this

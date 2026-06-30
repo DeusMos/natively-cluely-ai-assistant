@@ -129,6 +129,7 @@ import { recordAttribution, hindsightModeFor, type AttributionInput } from './in
 import { routeContext, isBackwardLookingQuery } from './intelligence/ContextRouter';
 import { SearchOrchestrator, bestTranscriptLinePerMeeting, type SearchCandidate } from './intelligence/SearchOrchestrator';
 import { CHAT_MODE_PROMPT } from './llm/prompts';
+import { OVERLAY_CONTEXT_MAX_CHARS } from './services/context/overlayUserContext';
 
 // Prompt System v2 (flag promptSystemV2): the manual-chat base prompt. When
 // the flag is ON this is the composed core+mode+answer prompt (which LLMHelper
@@ -10917,6 +10918,56 @@ export function initializeIpcHandlers(appState: AppState): void {
     } catch {
       return false;
     }
+
+  safeHandle('get-audio-session-config', async () => {
+    const sm = SettingsManager.getInstance();
+    return {
+      mode: sm.get('audioSessionMode') ?? 'video-call',
+      phoneCallCaptureSource: sm.get('phoneCallCaptureSource') ?? 'system',
+      phoneCallUserSpeakerTag: sm.get('phoneCallUserSpeakerTag') ?? 1,
+    };
+  });
+
+  safeHandle(
+    'set-audio-session-config',
+    async (
+      _,
+      config: {
+        mode?: 'video-call' | 'phone-call';
+        phoneCallCaptureSource?: 'system' | 'mic';
+        phoneCallUserSpeakerTag?: 0 | 1;
+      },
+    ) => {
+      if (!config || typeof config !== 'object') {
+        return { success: false, error: 'invalid_config' };
+      }
+      const sm = SettingsManager.getInstance();
+      if (config.mode === 'video-call' || config.mode === 'phone-call') {
+        sm.set('audioSessionMode', config.mode);
+      }
+      if (config.phoneCallCaptureSource === 'system' || config.phoneCallCaptureSource === 'mic') {
+        sm.set('phoneCallCaptureSource', config.phoneCallCaptureSource);
+      }
+      if (config.phoneCallUserSpeakerTag === 0 || config.phoneCallUserSpeakerTag === 1) {
+        sm.set('phoneCallUserSpeakerTag', config.phoneCallUserSpeakerTag);
+      }
+      const payload = {
+        mode: sm.get('audioSessionMode') ?? 'video-call',
+        phoneCallCaptureSource: sm.get('phoneCallCaptureSource') ?? 'system',
+        phoneCallUserSpeakerTag: sm.get('phoneCallUserSpeakerTag') ?? 1,
+      };
+      BrowserWindow.getAllWindows().forEach((win) => {
+        if (!win.isDestroyed()) {
+          win.webContents.send('audio-session-config-changed', payload);
+        }
+      });
+      if (appState.getIsMeetingActive()) {
+        await appState.reconfigureSttForAudioSession();
+      }
+      return { success: true, config: payload };
+    },
+  );
+
   });
 
   safeHandle('switch-to-ollama', async (_, model?: string, url?: string) => {
@@ -17871,6 +17922,38 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle('roleInsight:cancel', async () => {
     try {
       getRoleInsightService()?.cancel();
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // ==========================================
+  // Overlay Context Editor
+  // ==========================================
+
+  safeHandle('overlay:get-context', async () => {
+    try {
+      const content = DatabaseManager.getInstance().getOverlayContext();
+      return { success: true, content };
+    } catch (error: any) {
+      return { success: false, content: '', error: error.message };
+    }
+  });
+
+  safeHandle('overlay:save-context', async (_, content: string) => {
+    try {
+      const trimmed = typeof content === 'string' ? content.slice(0, OVERLAY_CONTEXT_MAX_CHARS) : '';
+      DatabaseManager.getInstance().saveOverlayContext(trimmed);
+
+      const intelligenceManager = appState.getIntelligenceManager();
+      intelligenceManager.setOverlayContext(trimmed);
+
+      const llmHelper = appState.processingHelper?.getLLMHelper?.();
+      if (llmHelper?.setOverlayContext) {
+        llmHelper.setOverlayContext(trimmed);
+      }
+
       return { success: true };
     } catch (error: any) {
       return { success: false, error: error.message };
