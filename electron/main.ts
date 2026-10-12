@@ -7259,6 +7259,9 @@ export class AppState {
     // test page. Normal mode is unchanged (active show + focus).
     this.windowHelper.setWindowMode('launcher', this.isUndetectable ? true : undefined);
     this.stickyNoteWindowHelper.closeAll();
+    // Abort in-flight intelligence streams now — the background stopMeeting()
+    // (250 ms STT grace + persistence) would otherwise let them keep emitting.
+    this.intelligenceManager.resetEngine();
 
     // ─── CLEAR THE OVERLAY TREE WHILE IT IS HIDDEN ─────────────────────────
     // The overlay BrowserWindow is PERSISTENT — created once with show:false

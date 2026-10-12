@@ -15851,36 +15851,40 @@ let isMultimodal = !!(imagePaths?.length);
     console.log(`[LLMHelper] ⚠️ Flash exhausted. Switching to Gemini Pro for robust retry...`);
     const maxProRetries = 5;
 
-    for (let attempt = 1; attempt <= maxProRetries; attempt++) {
-      try {
-        console.log(`[LLMHelper] 🔄 Gemini Pro Attempt ${attempt}/${maxProRetries}...`);
-        await this.rateLimiters.gemini.acquire();
-        const response = await this.withTimeout(
-          // @ts-ignore
-          this.client.models.generateContent({
-            model: GEMINI_PRO_MODEL,
-            contents: contents,
-            config: {
-              maxOutputTokens: MAX_OUTPUT_TOKENS,
-              temperature: 0.3,
-            }
-          }),
-          60000,
-          `Gemini Pro Summary (Attempt ${attempt})`
-        );
-        const text = response.text || "";
+    if (this.client) {
+      for (let attempt = 1; attempt <= maxProRetries; attempt++) {
+        try {
+          console.log(`[LLMHelper] 🔄 Gemini Pro Attempt ${attempt}/${maxProRetries}...`);
+          await this.rateLimiters.gemini.acquire();
+          const response = await this.withTimeout(
+            // @ts-ignore
+            this.client.models.generateContent({
+              model: GEMINI_PRO_MODEL,
+              contents: contents,
+              config: {
+                maxOutputTokens: MAX_OUTPUT_TOKENS,
+                temperature: 0.3,
+              }
+            }),
+            60000,
+            `Gemini Pro Summary (Attempt ${attempt})`
+          );
+          const text = response.text || "";
 
-        if (text.trim().length > 0) {
-          console.log(`[LLMHelper] ✅ Gemini Pro summary generated successfully.`);
-          return this.processResponse(text);
+          if (text.trim().length > 0) {
+            console.log(`[LLMHelper] ✅ Gemini Pro summary generated successfully.`);
+            return this.processResponse(text);
+          }
+        } catch (e: any) {
+          console.warn(`[LLMHelper] ⚠️ Gemini Pro attempt ${attempt} failed: ${e.message}`);
+          // Aggressive backoff for Pro: 2s, 4s, 8s, 16s, 32s
+          const backoff = 2000 * Math.pow(2, attempt - 1);
+          console.log(`[LLMHelper] Waiting ${backoff}ms before next retry...`);
+          await new Promise(r => setTimeout(r, backoff));
         }
-      } catch (e: any) {
-        console.warn(`[LLMHelper] ⚠️ Gemini Pro attempt ${attempt} failed: ${e.message}`);
-        // Aggressive backoff for Pro: 2s, 4s, 8s, 16s, 32s
-        const backoff = 2000 * Math.pow(2, attempt - 1);
-        console.log(`[LLMHelper] Waiting ${backoff}ms before next retry...`);
-        await new Promise(r => setTimeout(r, backoff));
       }
+    } else {
+      console.log(`[LLMHelper] Gemini client not initialized — skipping Gemini Pro.`);
     }
 
     // ATTEMPT 6: Ollama (last-resort local fallback — gives users without ANY
