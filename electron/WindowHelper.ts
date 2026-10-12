@@ -2009,7 +2009,11 @@ export class WindowHelper {
       // The overlay follows so the pill keeps its "centered, PILL_GAP above
       // the shell" relationship — from the user's hand the whole group moves.
       const targetX = Math.round(p.x + p.width / 2 - o.width / 2);
-      const targetY = p.y + p.height + WindowHelper.PILL_GAP;
+      // Exact inverse of positionPillWindow (which anchors on the PANEL top,
+      // o.y + OVERLAY_PANEL_INSET). Omitting the inset made every pill→overlay
+      // round trip shift the group by OVERLAY_PANEL_INSET; on X11, where our own
+      // move events arrive outside the auxSyncing guard, that ran away forever.
+      const targetY = p.y + p.height + WindowHelper.PILL_GAP - OVERLAY_PANEL_INSET;
       // 1px tolerance: centering rounds (odd width deltas), so the forward and
       // reverse computations can disagree by 1px. Without the tolerance that
       // disagreement could ping-pong pill↔overlay into a slow positional
