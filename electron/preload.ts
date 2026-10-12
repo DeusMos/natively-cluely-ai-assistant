@@ -130,6 +130,10 @@ interface ElectronAPI {
   onUnauthorized: (callback: () => void) => () => void;
   onDebugError: (callback: (error: string) => void) => () => void;
   takeScreenshot: () => Promise<void>;
+  /** Linux shared desktop (nested Xephyr display for screen sharing). */
+  sharedDesktopStatus: () => Promise<{ supported: boolean; unavailableReason?: string; running: boolean; display: string | null; extensionReady: boolean }>;
+  sharedDesktopStart: () => Promise<{ supported: boolean; unavailableReason?: string; running: boolean; display: string | null; extensionReady: boolean }>;
+  sharedDesktopStop: () => Promise<{ supported: boolean; unavailableReason?: string; running: boolean; display: string | null; extensionReady: boolean }>;
   takeSelectiveScreenshot: () => Promise<{ path: string; preview: string; cancelled?: boolean }>;
   moveWindowLeft: () => Promise<void>;
   moveWindowRight: () => Promise<void>;
@@ -1488,6 +1492,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   getRecognitionLanguages: () => ipcRenderer.invoke('get-recognition-languages'),
   takeScreenshot: () => ipcRenderer.invoke('take-screenshot'),
+  sharedDesktopStatus: () => ipcRenderer.invoke('shared-desktop:status'),
+  sharedDesktopStart: () => ipcRenderer.invoke('shared-desktop:start'),
+  sharedDesktopStop: () => ipcRenderer.invoke('shared-desktop:stop'),
   takeSelectiveScreenshot: () => ipcRenderer.invoke('take-selective-screenshot'),
   getScreenshots: () => ipcRenderer.invoke('get-screenshots'),
   deleteScreenshot: (path: string) => ipcRenderer.invoke('delete-screenshot', path),

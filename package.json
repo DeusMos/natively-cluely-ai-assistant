@@ -28,7 +28,7 @@
     "dev:agent": "node scripts/dev-agent.mjs",
     "app:build": "npm run build && npm run typecheck:electron && npm run build:electron && cross-env NATIVELY_BUILD_ALL_MAC_ARCHES=1 npm run build:native && node scripts/ensure-sharp-mac-deps.js && node scripts/ensure-napi-canvas-mac-deps.js && node scripts/ensure-node-llama-cpp-mac-deps.js && node scripts/ensure-sqlite-vec.js && npm run verify:packaged-local-assets && node scripts/package-app.js",
     "app:build:signed": "node scripts/preflight-notary.cjs && npm run build && npm run typecheck:electron && npm run build:electron && cross-env NATIVELY_BUILD_ALL_MAC_ARCHES=1 npm run build:native && node scripts/ensure-sharp-mac-deps.js && node scripts/ensure-napi-canvas-mac-deps.js && node scripts/ensure-node-llama-cpp-mac-deps.js && node scripts/ensure-sqlite-vec.js && npm run verify:packaged-local-assets && node scripts/package-app.js --config electron-builder.signed.cjs",
-    "app:build:linux": "npm run build && npm run typecheck:electron && npm run build:electron && npm run build:native && node scripts/ensure-sqlite-vec.js && node scripts/package-app.js --linux",
+    "app:build:linux": "npm run build && npm run build:browser-ext && npm run typecheck:electron && npm run build:electron && npm run build:native && node scripts/ensure-sqlite-vec.js && node scripts/package-app.js --linux",
     "dist:linux": "npm run app:build:linux",
     "watch": "node scripts/build-electron.js --watch",
     "start": "npm run app:dev",
@@ -135,7 +135,8 @@
     "test:diagram:render": "electron tests/diagram/mermaid-render.check.mjs",
     "test:diagram:card": "electron tests/diagram/diagram-card.check.mjs",
     "test:diagram:overlay": "node tests/diagram/overlay-stream.check.mjs",
-    "test:diagram:live": "npm run build:electron && cross-env RUN_DIAGRAM_LIVE=1 ELECTRON_RUN_AS_NODE=1 electron tests/diagram/live-deepseek.cjs && node tests/diagram/live-replay.check.mjs"
+    "test:diagram:live": "npm run build:electron && cross-env RUN_DIAGRAM_LIVE=1 ELECTRON_RUN_AS_NODE=1 electron tests/diagram/live-deepseek.cjs && node tests/diagram/live-replay.check.mjs",
+    "build:browser-ext": "npm --prefix natively-browser ci && npm --prefix natively-browser run build"
   },
   "build": {
     "generateUpdatesFilesForAllChannels": true,
@@ -363,7 +364,21 @@
       ],
       "icon": "assets/icons/png/",
       "category": "Office",
-      "maintainer": "Natively <evinjohnn@gmail.com>"
+      "maintainer": "Natively <evinjohnn@gmail.com>",
+      "extraResources": [
+        {
+          "from": "scripts/linux/shared-desktop.sh",
+          "to": "shared-desktop/shared-desktop.sh"
+        },
+        {
+          "from": "natively-browser/dist/",
+          "to": "natively-browser/",
+          "filter": [
+            "**/*",
+            "!**/*.map"
+          ]
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,

@@ -1490,6 +1490,20 @@ export function initializeIpcHandlers(appState: AppState): void {
     return appState.deleteScreenshot(resolved);
   });
 
+  // Linux shared desktop: nested display for screen sharing (platform/sharedDesktop.ts).
+  safeHandle('shared-desktop:status', async () => {
+    const { getSharedDesktopStatus } = require('./platform/sharedDesktop') as typeof import('./platform/sharedDesktop');
+    return getSharedDesktopStatus();
+  });
+  safeHandle('shared-desktop:start', async () => {
+    const { startSharedDesktop } = require('./platform/sharedDesktop') as typeof import('./platform/sharedDesktop');
+    return startSharedDesktop();
+  });
+  safeHandle('shared-desktop:stop', async () => {
+    const { stopSharedDesktop } = require('./platform/sharedDesktop') as typeof import('./platform/sharedDesktop');
+    return stopSharedDesktop();
+  });
+
   safeHandle('take-screenshot', async () => {
     try {
       const screenshotPath = await appState.takeScreenshot();

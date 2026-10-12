@@ -206,6 +206,10 @@ export interface ElectronAPI {
   onUnauthorized: (callback: () => void) => () => void
   onDebugError: (callback: (error: string) => void) => () => void
   takeScreenshot: () => Promise<{ path: string; preview: string }>
+  /** Linux shared desktop (nested Xephyr display for screen sharing). */
+  sharedDesktopStatus: () => Promise<{ supported: boolean; unavailableReason?: string; running: boolean; display: string | null; extensionReady: boolean }>
+  sharedDesktopStart: () => Promise<{ supported: boolean; unavailableReason?: string; running: boolean; display: string | null; extensionReady: boolean }>
+  sharedDesktopStop: () => Promise<{ supported: boolean; unavailableReason?: string; running: boolean; display: string | null; extensionReady: boolean }>
   takeSelectiveScreenshot: () => Promise<{ path: string; preview: string; cancelled?: boolean }>
   moveWindowLeft: () => Promise<void>
   moveWindowRight: () => Promise<void>
