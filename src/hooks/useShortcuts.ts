@@ -31,6 +31,7 @@ export interface ShortcutConfig {
     toggleMousePassthrough: string[];
     processScreenshots: string[];
     captureAndProcess: string[];
+    answerScreenMcq: string[];
     capturePage: string[];
     resetCancel: string[];
     takeScreenshot: string[];
@@ -66,6 +67,7 @@ function buildDefaultShortcuts(): ShortcutConfig {
         toggleMousePassthrough: [mod, shift, 'B'],
         processScreenshots: [mod, 'Enter'],
         captureAndProcess: [mod, shift, 'Enter'],
+        answerScreenMcq: [mod, shift, 'M'],
         capturePage: [mod, 'Y'],
         resetCancel: [mod, 'R'],
         takeScreenshot: [mod, 'H'],
@@ -119,6 +121,7 @@ const BACKEND_ID_TO_ACTION: Partial<Record<string, keyof ShortcutConfig>> = {
     'general:toggle-mouse-passthrough': 'toggleMousePassthrough',
     'general:process-screenshots': 'processScreenshots',
     'general:capture-and-process': 'captureAndProcess',
+    'general:answer-screen-mcq': 'answerScreenMcq',
     'general:capture-dom': 'capturePage',
     'general:reset-cancel': 'resetCancel',
     'general:take-screenshot': 'takeScreenshot',
@@ -318,6 +321,7 @@ export const useShortcuts = () => {
             case 'toggleMousePassthrough': backendId = 'general:toggle-mouse-passthrough'; break;
             case 'processScreenshots': backendId = 'general:process-screenshots'; break;
             case 'captureAndProcess': backendId = 'general:capture-and-process'; break;
+            case 'answerScreenMcq': backendId = 'general:answer-screen-mcq'; break;
             case 'capturePage': backendId = 'general:capture-dom'; break;
             case 'resetCancel': backendId = 'general:reset-cancel'; break;
             case 'takeScreenshot': backendId = 'general:take-screenshot'; break;

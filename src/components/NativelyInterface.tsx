@@ -376,6 +376,7 @@ import { normalizeFinalizedMarkdownMath, renderStreamingMarkdown } from '../lib/
 import ReactMarkdown from 'react-markdown';
 import { useT } from '../i18n';
 import { OverlayContextEditor } from './OverlayContextEditor';
+import { SCREEN_MCQ_INSTRUCTION } from '../lib/screenMcqInstruction.mjs';
 // System-design diagram artifacts: a ```mermaid block in an answer is drawn as
 // a diagram card. Mermaid itself is loaded on demand inside mermaidRenderer —
 // none of these imports pull it into this chunk.
@@ -10588,7 +10589,7 @@ Provide only the answer, nothing else.`;
       // whether the state update has flushed yet.
       requestAnimationFrame(() => {
         try {
-          handlersRef.current.handleWhatToSay();
+          handlersRef.current.handleWhatToSay(data.task === 'answer-mcq' ? SCREEN_MCQ_INSTRUCTION : undefined);
         } finally {
           pendingCaptureRef.current = null;
         }

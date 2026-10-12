@@ -2001,6 +2001,9 @@ export class AppState {
           // Single-trigger: capture current screen then immediately request AI analysis
           await this.captureScreenAndProcess();
 
+        } else if (actionId === 'general:answer-screen-mcq') {
+          await this.captureScreenAndProcess('answer-mcq');
+
         } else if (actionId === 'general:capture-dom') {
           // One hotkey, the right capture: if the companion browser extension is
           // connected, ask it to grab the active tab's page context (delivered to
@@ -8215,7 +8218,7 @@ export class AppState {
    * `general:capture-and-process` hotkey and the `general:capture-dom`
    * screenshot fallback share one path.
    */
-  private async captureScreenAndProcess(): Promise<void> {
+  private async captureScreenAndProcess(task?: 'answer-mcq'): Promise<void> {
     const screenshotPath = await this.takeScreenshot(false);
     const preview = await this.getImagePreview(screenshotPath);
     // Ensure the window is visible so the user can see the response without stealing focus
@@ -8229,6 +8232,7 @@ export class AppState {
     this.sendToWindow(mainWindow, 'capture-and-process', {
       path: screenshotPath,
       preview,
+      ...(task ? { task } : {}),
     });
   }
 
