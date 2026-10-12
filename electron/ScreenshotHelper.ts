@@ -10,7 +10,10 @@ import sharp, { type OverlayOptions } from "sharp"
 import { exec as execShell } from "child_process"
 import {
   assertScreenshotPathWithinUserData,
+  buildDisplayScreenshotCommand,
   LINUX_SCREENSHOT_INSTALL_HINT,
+  resolveLinuxCaptureDisplay,
+  SHARED_DESKTOP_DISPLAY_MARKER,
 } from "./platform/linuxScreenshot"
 
 // Module-level: promisified shell exec created once per process lifetime.
@@ -689,6 +692,15 @@ export class ScreenshotHelper {
     const safePath = outputPath.replace(/"/g, '\\"');
     const platform = process.platform;
     if (platform === 'linux') {
+      const captureDisplay = resolveLinuxCaptureDisplay({
+        env: process.env,
+        readMarker: () => (fs.existsSync(SHARED_DESKTOP_DISPLAY_MARKER) ? fs.readFileSync(SHARED_DESKTOP_DISPLAY_MARKER, 'utf8') : null),
+        displayIsUp: (d) => fs.existsSync(`/tmp/.X11-unix/X${d.slice(1)}`),
+      });
+      if (captureDisplay) {
+        console.log(`[ScreenshotHelper] Capturing shared display ${captureDisplay}`);
+        return buildDisplayScreenshotCommand(captureDisplay, safePath, interactive);
+      }
       return interactive
         ? `gnome-screenshot -a -f "${safePath}" 2>/dev/null || scrot -s "${safePath}" 2>/dev/null || import "${safePath}"`
         : `gnome-screenshot -f "${safePath}" 2>/dev/null || scrot "${safePath}" 2>/dev/null || import -window root "${safePath}"`;
