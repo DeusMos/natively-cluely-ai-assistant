@@ -947,6 +947,7 @@ The user triggered this action with a coding problem on screen and NO new questi
                 acceptedConstraints: interviewBundle?.acceptedRequirements?.length
                     ? interviewBundle.acceptedRequirements
                     : undefined,
+                overlayContext: interviewBundle?.overlayContext?.trim() || undefined,
                 tokenBudget: Math.max(1000, assemblerBudget),
                 systemPrompt: finalPromptOverride,
             });

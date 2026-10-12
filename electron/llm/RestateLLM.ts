@@ -33,6 +33,7 @@ export class RestateLLM {
                 acceptedConstraints: interviewCtx.acceptedRequirements?.length
                     ? interviewCtx.acceptedRequirements
                     : undefined,
+                overlayContext: interviewCtx.overlayContext?.trim() || undefined,
                 priorResponses: interviewCtx.priorCopilotResponses.length > 0
                     ? interviewCtx.priorCopilotResponses
                     : undefined,

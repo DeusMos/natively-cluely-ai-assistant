@@ -188,6 +188,14 @@ export class IntelligenceManager extends EventEmitter {
         return this.session.getFormattedSpeech(lastSeconds);
     }
 
+    setOverlayContext(text: string): void {
+        this.session.setOverlayContext(text);
+    }
+
+    getOverlayContext(): string {
+        return this.session.getOverlayContext();
+    }
+
     /** Unified interview context for manual chat and intelligence paths. */
     getInterviewContextForChat(): string {
         return formatInterviewContextForChat(buildInterviewContext(this.session));
@@ -405,6 +413,10 @@ export class IntelligenceManager extends EventEmitter {
     // ============================================
 
     async stopMeeting(): Promise<{ meetingId: string; memoryEligibleCount: number } | null> {
+        // Cancel in-flight WTA / assist streams before session.reset() snapshots
+        // or clears transcript — otherwise a slow LLM call from meeting N can
+        // emit into meeting N+1 and pollute priorCopilotResponses.
+        this.resetEngine();
         try {
             return await this.persistence.stopMeeting();
         } finally {

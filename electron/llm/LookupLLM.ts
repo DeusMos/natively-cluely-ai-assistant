@@ -39,6 +39,7 @@ export class LookupLLM {
                 acceptedConstraints: interviewCtx.acceptedRequirements?.length
                     ? interviewCtx.acceptedRequirements
                     : undefined,
+                overlayContext: interviewCtx.overlayContext?.trim() || undefined,
                 priorResponses: interviewCtx.priorCopilotResponses.length > 0
                     ? interviewCtx.priorCopilotResponses
                     : undefined,

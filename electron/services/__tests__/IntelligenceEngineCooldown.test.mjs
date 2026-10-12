@@ -50,7 +50,7 @@ describe('IntelligenceEngine.runWhatShouldISay — cooldown (RC-A)', () => {
   test('skipCooldown bypasses cooldown gate', async () => {
     const { engine } = await makeEngine();
     void engine.runWhatShouldISay('first');
-    const second = await engine.runWhatShouldISay('second', 0.8, undefined, { skipCooldown: true });
+    const second = await engine.runWhatShouldISay('second', 0.8, undefined, { skipCooldown: true, waitForSpeechMs: 0 });
     assert.notEqual(second, null);
   });
 

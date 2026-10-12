@@ -252,12 +252,23 @@ export class SessionTracker {
     // Reference to RecapLLM for epoch summarization (injected later)
     private recapLLM: RecapLLM | null = null;
 
+    /** User-pasted context from the overlay editor — survives session reset. */
+    private overlayContext: string = '';
+
     // ============================================
     // Configuration
     // ============================================
 
     public setRecapLLM(recapLLM: RecapLLM | null): void {
         this.recapLLM = recapLLM;
+    }
+
+    public setOverlayContext(text: string): void {
+        this.overlayContext = typeof text === 'string' ? text : '';
+    }
+
+    public getOverlayContext(): string {
+        return this.overlayContext;
     }
 
     public setMeetingMetadata(metadata: any): void {
@@ -873,7 +884,38 @@ export class SessionTracker {
                 return this.contextItems[i].text;
             }
         }
-        return null;
+        const interim = this.lastInterimInterviewer?.text?.trim();
+        return interim && interim.length > 0 ? interim : null;
+    }
+
+    /** True when recent finals or rolling interim include enough interviewer speech. */
+    hasRecentInterviewerSpeech(lastSeconds: number = 180, minChars: number = 8): boolean {
+        return this.getContextWithInterim(lastSeconds).some(
+            (item) => item.role === 'interviewer' && item.text.trim().length >= minChars,
+        );
+    }
+
+    /**
+     * Poll until interviewer speech is available (final or interim).
+     * Returns false when cancelled or maxWaitMs elapses without speech.
+     */
+    async waitForRecentInterviewerSpeech(
+        lastSeconds: number = 180,
+        minChars: number = 8,
+        maxWaitMs: number = 8000,
+        pollMs: number = 150,
+        isCancelled?: () => boolean,
+    ): Promise<boolean> {
+        if (this.hasRecentInterviewerSpeech(lastSeconds, minChars)) return true;
+
+        const deadline = Date.now() + maxWaitMs;
+        while (Date.now() < deadline) {
+            if (isCancelled?.()) return false;
+            await new Promise((resolve) => setTimeout(resolve, pollMs));
+            if (isCancelled?.()) return false;
+            if (this.hasRecentInterviewerSpeech(lastSeconds, minChars)) return true;
+        }
+        return false;
     }
 
     /**

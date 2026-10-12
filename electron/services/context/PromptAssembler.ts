@@ -151,6 +151,7 @@ export function escapeUserContent(text: string): string {
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&apos;');
 }
+import { buildOverlayUserContextBlock } from './overlayUserContext';
 
 // Screen context delivered to PromptAssembler.
 //
@@ -241,6 +242,7 @@ export class PromptAssembler {
         currentTurn?: string | null;
         activeProblem?: string | null;
         acceptedConstraints?: string[];
+        overlayContext?: string;
         tokenBudget: number;
         systemPrompt: string;
         developerPrompt?: string;
@@ -267,6 +269,17 @@ export class PromptAssembler {
         // 1. INTENT CONTEXT — classifier output from trusted app code.
         if (params.intentContext) {
             this.addBlock(packet, this.buildIntentContextBlock(params.intentContext));
+        }
+
+        // 1b. OVERLAY USER CONTEXT — pasted from the native UI context editor
+        if (params.overlayContext?.trim()) {
+            this.addBlock(packet, {
+                type: 'overlay_user_context',
+                trustLevel: TrustLevel.USER_PREFERENCES,
+                source: 'overlay_editor',
+                tokenBudget: 800,
+                content: buildOverlayUserContextBlock(params.overlayContext.trim()),
+            });
         }
 
         // 2. ASSISTANT_HISTORY (anti-repetition) — must come early so later

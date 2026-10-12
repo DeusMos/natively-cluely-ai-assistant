@@ -12,6 +12,8 @@ export interface InterviewContextBundle {
   priorCopilotResponses: string[];
   activeProblemStatement: string | null;
   acceptedRequirements: string[];
+  /** User-pasted context from the overlay editor. */
+  overlayContext: string;
 }
 
 export interface BuildInterviewContextOptions {
@@ -64,6 +66,7 @@ export function buildInterviewContext(
     priorCopilotResponses: temporal.previousResponses,
     activeProblemStatement: active?.statement?.trim() || coding.question?.trim() || null,
     acceptedRequirements,
+    overlayContext: session.getOverlayContext?.() ?? '',
   };
 }
 
