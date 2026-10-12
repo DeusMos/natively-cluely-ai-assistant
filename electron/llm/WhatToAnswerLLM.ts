@@ -65,7 +65,6 @@ async function raceWithBudget<T>(promise: Promise<T>, ms: number, fallback: T): 
         );
     });
 }
-import type { InterviewContextBundle } from "../services/context/InterviewContextBuilder";
 
 // Dynamically imported to avoid circular dependency at module load time
 type ModesManagerType = {
@@ -208,9 +207,6 @@ export class WhatToAnswerLLM {
         // Owned by the caller rather than stored on the instance because
         // WhatToAnswerLLM is a long-lived singleton and turns can overlap.
         truncationSink?: { truncated: boolean; reason?: string },
-        // Technical-interview context (session spine, current turn, active
-        // problem, accepted requirements) from InterviewContextBuilder.
-        interviewBundle?: InterviewContextBundle,
     ): AsyncGenerator<string> {
         const MEASURE = process.env.MEASURE_LATENCY === 'true';
         let tStart = 0, tIntent = 0, tTemporal = 0, tMode = 0, tTrunc = 0, tPrompt = 0, tStreamStart = 0;
@@ -941,13 +937,13 @@ The user triggered this action with a coding problem on screen and NO new questi
                 retrievedModeContext: typedModeContext || undefined,
                 pinnedModeInstructions: pinnedModeInstructions || undefined,
                 candidateProfile: typedCandidateProfile || undefined,
-                sessionSpine: interviewBundle?.spine,
-                currentTurn: interviewBundle?.currentTurn ?? undefined,
-                activeProblem: interviewBundle?.activeProblemStatement ?? undefined,
-                acceptedConstraints: interviewBundle?.acceptedRequirements?.length
-                    ? interviewBundle.acceptedRequirements
+                sessionSpine: requestSnapshot?.interviewBundle?.spine,
+                currentTurn: requestSnapshot?.interviewBundle?.currentTurn ?? undefined,
+                activeProblem: requestSnapshot?.interviewBundle?.activeProblemStatement ?? undefined,
+                acceptedConstraints: requestSnapshot?.interviewBundle?.acceptedRequirements?.length
+                    ? requestSnapshot!.interviewBundle!.acceptedRequirements
                     : undefined,
-                overlayContext: interviewBundle?.overlayContext?.trim() || undefined,
+                overlayContext: requestSnapshot?.interviewBundle?.overlayContext?.trim() || undefined,
                 tokenBudget: Math.max(1000, assemblerBudget),
                 systemPrompt: finalPromptOverride,
             });

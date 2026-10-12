@@ -142,10 +142,9 @@ export class SystemAudioCapture extends EventEmitter {
             this.monitor.start((err: Error | null, chunk: Buffer) => {
                 // napi v3 ThreadsafeFunction passes (err, arg) format
                 if (err) {
-                    const surfaced = process.platform === 'linux'
-                        ? surfaceLinuxSystemAudioError(err)
-                        : err;
-                    console.error('[SystemAudioCapture] Callback error:', surfaced.message);
+                    // Linux: swap in the user-facing PipeWire/Pulse message.
+                    if (process.platform === 'linux') err = surfaceLinuxSystemAudioError(err);
+                    console.error('[SystemAudioCapture] Callback error:', err);
                     this.isRecording = false; // Allow recovery via restart
                     // The Rust DSP thread has exited (a fatal init failure, or the
                     // platform stopped the stream — see speaker/stop_signal.rs),
@@ -174,7 +173,7 @@ export class SystemAudioCapture extends EventEmitter {
                             if (this._teardownPromise === retire) this._teardownPromise = null;
                         });
                     }
-                    this.emit('error', surfaced);
+                    this.emit('error', err);
                     return;
                 }
                 if (chunk && chunk.length > 0) {

@@ -45,11 +45,19 @@ export class MicrophoneCapture extends EventEmitter {
     // inside start() after a successful monitor.start).
     private preWarmEnabled: boolean = false;
     private phoneSpeakerMode: boolean = false;
+    // Phone-call mode with the mic as the source wants the permissive RMS gate
+    // (phone on speaker). main.ts installs the resolver once, so every
+    // `new MicrophoneCapture(deviceId)` site picks the mode up without threading it.
+    private static resolvePhoneSpeakerMode: () => boolean = () => false;
+
+    static setPhoneSpeakerModeResolver(resolve: () => boolean): void {
+        MicrophoneCapture.resolvePhoneSpeakerMode = resolve;
+    }
 
     constructor(deviceId?: string | null, phoneSpeakerMode?: boolean) {
         super();
         this.deviceId = deviceId || null;
-        this.phoneSpeakerMode = phoneSpeakerMode ?? false;
+        this.phoneSpeakerMode = phoneSpeakerMode ?? MicrophoneCapture.resolvePhoneSpeakerMode();
         if (!RustMicCapture) {
             console.error('[MicrophoneCapture] Rust class implementation not found.');
         } else {

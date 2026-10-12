@@ -4267,16 +4267,18 @@ ${IMAGE_TRUST_TRAILER}`;
       console.warn('[LLMHelper] ModesManager load failed in generateSuggestion (non-fatal):', _modeErr?.message);
     }
 
+    // The overlay editor's user context leads the mode context block.
+    if (this.overlayContext?.trim()) {
+      const overlayBlock = buildOverlayUserContextBlock(this.overlayContext);
+      modeContextBlock = modeContextBlock ? `${overlayBlock}\n\n${modeContextBlock}` : overlayBlock;
+    }
+
     // Prepend mode context block (reference files, custom context) to the transcript context
     const enrichedContext = modeContextBlock
       ? `${modeContextBlock}\n\n${context}`
       : context;
 
-    const overlayBlock = this.overlayContext?.trim()
-      ? buildOverlayUserContextBlock(this.overlayContext)
-      : '';
-
-    const suggestionContext = [overlayBlock, enrichedContext].filter(Boolean).join('\n\n');
+    const suggestionContext = enrichedContext;
 
     const basePrompt = activeModePrompt
       ? `${HARD_SYSTEM_PROMPT}\n\n## ACTIVE MODE\n${activeModePrompt}`

@@ -610,7 +610,7 @@ export class GoogleSTT extends EventEmitter {
             audioChannelCount: this.audioChannelCount,
             languageCode: this.languageCode,
             enableAutomaticPunctuation: true,
-            model: this.diarizationEnabled ? 'phone_call' : this.resolveModel(),
+            model: this.resolveModel(),
             useEnhanced: !this.diarizationEnabled,
         };
         // phone_call (used for diarization) rejects alternative_language_codes.
@@ -618,6 +618,8 @@ export class GoogleSTT extends EventEmitter {
             recognitionConfig.alternativeLanguageCodes = this.alternativeLanguageCodes;
         }
         if (this.diarizationEnabled) {
+            // Phone-call diarization needs the phone_call model.
+            recognitionConfig.model = 'phone_call';
             recognitionConfig.enableSpeakerDiarization = true;
             recognitionConfig.diarizationConfig = {
                 enableSpeakerDiarization: true,

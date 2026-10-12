@@ -1150,6 +1150,8 @@ interface Meeting {
         keyPoints: string[];
         actionItemsTitle?: string;
         keyPointsTitle?: string;
+        /** Post-call debrief (technical-interview mode), see MeetingPersistence. */
+        debrief?: string;
         sections?: Array<{ title: string; bullets: string[] }>;
         sectionsV3?: Array<{ id: string; title: string; order?: number; bullets: Array<{ id?: string; text: string; confidence?: 'high' | 'medium' | 'low'; evidence?: Evidence[] }> }>;
         tldr?: string[];

@@ -16984,21 +16984,11 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
+  // Like generate-clarify: null means cancelled/superseded or nothing to work
+  // from, not a failure — the engine reports real failures via its 'error' event.
   safeHandle('generate-restate', async () => {
-    try {
-      const intelligenceManager = appState.getIntelligenceManager();
-      const restatement = await intelligenceManager.runRestate();
-      if (restatement === null) {
-        const win = appState.getMainWindow();
-        win?.webContents.send('intelligence-error', {
-          error: 'Could not restate the question. Try again after some audio context is available.',
-          mode: 'restate',
-        });
-      }
-      return { restatement };
-    } catch (error: any) {
-      throw error;
-    }
+    const restatement = await appState.getIntelligenceManager().runRestate();
+    return { restatement };
   });
 
   safeHandle('generate-lookup', async (_, focusTerm?: string) => {
@@ -17016,13 +17006,6 @@ export function initializeIpcHandlers(appState: AppState): void {
         }
       }
       const explanation = await intelligenceManager.runLookup(focusTerm, retrievedContext);
-      if (explanation === null) {
-        const win = appState.getMainWindow();
-        win?.webContents.send('intelligence-error', {
-          error: 'Could not generate a lookup explanation. Try again with more context.',
-          mode: 'lookup',
-        });
-      }
       return { explanation };
     } catch (error: any) {
       throw error;

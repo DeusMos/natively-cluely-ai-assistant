@@ -4431,6 +4431,18 @@ export class IntelligenceEngine extends EventEmitter {
                 } catch { return undefined; }
             })();
 
+            // Technical-interview context (session spine, active problem, accepted
+            // requirements), frozen into the request snapshot for PromptAssembler.
+            const interviewCtx = buildInterviewContext(this.session);
+            // Phase classification is LLM-based and runs off the answer path.
+            void classifyInterviewPhase(this.llmHelper, interviewCtx.recencyTranscript || interviewCtx.spine)
+                .then(({ phase }) => {
+                    if (phase !== 'unknown') this.session.setInterviewPhase(phase);
+                })
+                .catch((err) => {
+                    console.warn('[IntelligenceEngine] interview phase classification failed', (err as Error)?.message);
+                });
+
             const requestSnapshot: WhatToAnswerRequestSnapshot = Object.freeze({
                 activeModeInfo: snapshotModeInfo,
                 modeId: snapshotModeId,
@@ -4443,6 +4455,7 @@ export class IntelligenceEngine extends EventEmitter {
                 ...(wtaContextOsGeneration ? { contextOsGeneration: wtaContextOsGeneration } : {}),
                 ...(wtaV3Prompt ? { v3Prompt: wtaV3Prompt } : {}),
                 ...(wtaDiagramTurn && (wtaDiagramTurn.signals || wtaDiagramTurn.turnBlock) ? { diagramTurn: wtaDiagramTurn } : {}),
+                interviewBundle: interviewCtx,
             });
 
             // T4 (2026-08-28): did V3 compose this turn's prompt? Every
@@ -4485,18 +4498,7 @@ export class IntelligenceEngine extends EventEmitter {
             // session transcript and usage, and fed to the NEXT turn as
             // prior_assistant_responses evidence.
             const wtaTruncation: { truncated: boolean; reason?: string } = { truncated: false };
-            // Technical-interview context (session spine, active problem, accepted
-            // requirements) pinned into the prompt via PromptAssembler.
-            const interviewCtx = buildInterviewContext(this.session);
-            // Phase classification is LLM-based and runs off the answer path.
-            void classifyInterviewPhase(this.llmHelper, interviewCtx.recencyTranscript || interviewCtx.spine)
-                .then(({ phase }) => {
-                    if (phase !== 'unknown') this.session.setInterviewPhase(phase);
-                })
-                .catch((err) => {
-                    console.warn('[IntelligenceEngine] interview phase classification failed', (err as Error)?.message);
-                });
-            const stream = this.whatToAnswerLLM.generateStream(preparedTranscript, temporalContext, intentResult, imagePaths, screenContext, options?.promptInstruction, options?.activeSkill, options?.domContext, candidateProfile || undefined, answerPlan, modeContextPromise, requestSnapshot, whatToAnswerCancellationToken.signal, wtaTruncation, interviewCtx);
+            const stream = this.whatToAnswerLLM.generateStream(preparedTranscript, temporalContext, intentResult, imagePaths, screenContext, options?.promptInstruction, options?.activeSkill, options?.domContext, candidateProfile || undefined, answerPlan, modeContextPromise, requestSnapshot, whatToAnswerCancellationToken.signal, wtaTruncation);
             let streamAborted = false;
             let emittedStreamingToken = false;
             let streamingTokenBuffer = '';

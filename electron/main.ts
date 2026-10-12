@@ -1630,6 +1630,11 @@ export class AppState {
   } as const
 
   constructor() {
+    // Phone-call mode with the mic as source opens every meeting mic in
+    // phone-speaker suppression mode (see MicrophoneCapture).
+    MicrophoneCapture.setPhoneSpeakerModeResolver(
+      () => this.isPhoneCallMode() && this.getPhoneCallCaptureSource() === 'mic',
+    );
     // 1. Load boot-critical settings first (used by WindowHelpers)
     const settingsManager = SettingsManager.getInstance();
     this.isUndetectable = settingsManager.get('isUndetectable') ?? false;
@@ -3825,7 +3830,8 @@ export class AppState {
       stt = new GoogleSTT(speaker);
     }
 
-    const wantsDiarization = options?.diarize === true;
+    // Phone-call mode: the interviewer channel is the single diarized stream.
+    const wantsDiarization = options?.diarize ?? (speaker === 'interviewer' && this.isPhoneCallMode());
     if (wantsDiarization && !this.sttSupportsDiarization(stt)) {
       console.warn(
         `[Main] STT provider "${sttProvider}" does not support speaker diarization — falling back to Google STT for phone call mode`,
@@ -4634,12 +4640,6 @@ export class AppState {
     this.setupMicRecoveryHandler();
   }
 
-  private createMicrophoneCapture(deviceId?: string | null): MicrophoneCapture {
-    const phoneSpeaker =
-      this.isPhoneCallMode() && this.getPhoneCallCaptureSource() === 'mic';
-    return new MicrophoneCapture(deviceId, phoneSpeaker);
-  }
-
   private async setupSystemAudioPipeline(): Promise<void> {
     // REMOVED EARLY RETURN: if (this.systemAudioCapture && this.microphoneCapture) return; // Already initialized
 
@@ -4764,7 +4764,7 @@ export class AppState {
           // B3: same defense for mic ctor throws (USB device disappears on open,
           // exclusive-mode steal). Outer try/catch only logged; user got no banner.
           try {
-            this.microphoneCapture = this.createMicrophoneCapture();
+            this.microphoneCapture = new MicrophoneCapture();
             this._micPhoneSpeakerMode = wantPhoneSpeaker;
             this.wireMicCapture(this.microphoneCapture);
           } catch (capErr) {
@@ -5003,7 +5003,7 @@ export class AppState {
       this.microphoneCapture = null;
     }
     try {
-      this.microphoneCapture = this.createMicrophoneCapture(this._lastRequestedInputDeviceId);
+      this.microphoneCapture = new MicrophoneCapture(this._lastRequestedInputDeviceId);
       this._micSttRateApplied = false;
       this.wireMicCapture(this.microphoneCapture, '(Resume)');
       this.microphoneCapture.start();
@@ -5074,11 +5074,12 @@ export class AppState {
     // failed createSTTProvider leaves the field null and the capture's `?.write`
     // becomes a no-op rather than throwing. We only recreate ones we nulled, so
     // there is no risk of double-starting an existing provider.
-    // Phone-call mode runs one diarized STT for both speakers and no user STT.
+    // Phone-call mode runs one diarized STT for both speakers and no user STT
+    // (createSTTProvider diarizes the interviewer channel in that mode).
     const phoneMode = this.isPhoneCallMode();
     if (!this.googleSTT) {
       try {
-        this.googleSTT = this.createSTTProvider('interviewer', phoneMode ? { diarize: true } : undefined);
+        this.googleSTT = this.createSTTProvider('interviewer');
         this.googleSTT?.start();
       } catch (sttErr) {
         console.error('[Main] Resume: interviewer STT recreate failed:', sttErr);
@@ -5527,7 +5528,7 @@ export class AppState {
 
     try {
       console.log('[Main] Initializing MicrophoneCapture...');
-      this.microphoneCapture = this.createMicrophoneCapture(wantedInput);
+      this.microphoneCapture = new MicrophoneCapture(wantedInput);
       this._micSttRateApplied = false;
       this.wireMicCapture(this.microphoneCapture, '(Reconfigured)');
       console.log('[Main] MicrophoneCapture initialized.');
@@ -5553,7 +5554,7 @@ export class AppState {
       // failure case, so removing it is a separate change, not a cleanup.
       console.warn('[Main] Failed to initialize MicrophoneCapture with preferred ID. Falling back to default.', err);
       try {
-        this.microphoneCapture = this.createMicrophoneCapture(); // Default
+        this.microphoneCapture = new MicrophoneCapture(); // Default
         this._micSttRateApplied = false;
         this.wireMicCapture(this.microphoneCapture, '(Default)');
         this.broadcastDeviceSelection({
@@ -5583,7 +5584,7 @@ export class AppState {
         for (const candidateId of candidates) {
           try {
             console.log(`[Main] Trying mic fallback candidate: ${candidateId}`);
-            this.microphoneCapture = this.createMicrophoneCapture(candidateId);
+            this.microphoneCapture = new MicrophoneCapture(candidateId);
             this._micSttRateApplied = false;
             this.wireMicCapture(this.microphoneCapture, `(Fallback:${candidateId})`);
             this.broadcastDeviceSelection({
@@ -6393,7 +6394,7 @@ export class AppState {
               }
               this._micSttRateApplied = false;
 
-              this.microphoneCapture = this.createMicrophoneCapture(this._lastRequestedInputDeviceId);
+              this.microphoneCapture = new MicrophoneCapture(this._lastRequestedInputDeviceId);
 
               // Use the canonical wiring path (wireMicCapture) instead of hand-rolling
               // data/sample_rate_changed/speech_ended. Hand-rolled wiring drifts: this
