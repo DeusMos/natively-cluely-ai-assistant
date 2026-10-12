@@ -101,6 +101,26 @@ setsid env DISPLAY="$NESTED" \
     kwin_x11 &
     sleep 1
     plasmashell &
+    # Start Brave only once the desktop has settled: Plasma owns its bus name and
+    # the screen configuration (kscreen applies it for a few seconds after
+    # login) has stopped changing for 2s. Brave started during that window
+    # crashed at startup (SIGSEGV/SIGILL, no output).
+    for _ in $(seq 1 60); do
+      dbus-send --session --print-reply --dest=org.freedesktop.DBus / \
+        org.freedesktop.DBus.NameHasOwner string:org.kde.plasmashell 2>/dev/null \
+        | grep -q "boolean true" && break
+      sleep 0.25
+    done
+    prev=""; stable=0
+    for _ in $(seq 1 120); do
+      cur="$(xrandr --current 2>/dev/null)"
+      if [ "$cur" = "$prev" ]; then
+        stable=$((stable + 1)); [ "$stable" -ge 8 ] && break
+      else
+        stable=0; prev="$cur"
+      fi
+      sleep 0.25
+    done
     brave-browser --user-data-dir="$1" --no-first-run --no-default-browser-check --password-store=basic \
       --load-extension="$2" \
       --use-angle=vulkan --enable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE \
