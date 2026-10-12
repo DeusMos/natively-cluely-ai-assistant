@@ -118,7 +118,7 @@ export async function startSharedDesktop(): Promise<SharedDesktopStatus> {
   // Strip Electron/Node-specific variables so the nested session's apps start clean.
   const env: NodeJS.ProcessEnv = { ...process.env, NATIVELY_EXTENSION_DIR: extensionDir() };
   for (const key of Object.keys(env)) {
-    if (key.startsWith('ELECTRON_') || key === 'NODE_OPTIONS' || key === 'CHROME_DESKTOP') delete env[key];
+    if (key.startsWith('ELECTRON_') || ['NODE_OPTIONS', 'CHROME_DESKTOP', 'FC_FONTATIONS', 'VIPSHOME'].includes(key)) delete env[key];
   }
   // Detached + unref: the session outlives a Natively restart; stop it via the pid file.
   const child = spawn('bash', [scriptPath()], { detached: true, stdio: ['ignore', logFd, logFd], env });
