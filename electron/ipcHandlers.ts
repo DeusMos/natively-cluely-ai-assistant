@@ -8131,7 +8131,10 @@ export function initializeIpcHandlers(appState: AppState): void {
       selection,
       currentRequest: resolvedSkill.currentRequest,
       skill: resolvedSkill.skill ?? null,
-      manualContext: request.manualContext,
+      // The overlay Context editor's text, same as every non-Direct path gets.
+      manualContext: [appState.getIntelligenceManager().getOverlayContext().trim(), request.manualContext?.trim()]
+        .filter(Boolean)
+        .join('\n\n') || undefined,
       referenceFiles,
       pageContext: request.pageContext,
       history: request.history,

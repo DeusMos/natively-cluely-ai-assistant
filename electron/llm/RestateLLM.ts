@@ -1,6 +1,8 @@
 import { LLMHelper } from '../LLMHelper';
 import { RESTATE_MODE_PROMPT } from './prompts';
 import { PromptAssembler } from '../services/context/PromptAssembler';
+import { buildOverlayUserContextBlock } from '../services/context/overlayUserContext';
+import { estimateTokens } from './modelCapabilities';
 import type { InterviewContextBundle } from '../services/context/InterviewContextBuilder';
 
 export class RestateLLM {
@@ -37,7 +39,8 @@ export class RestateLLM {
                 priorResponses: interviewCtx.priorCopilotResponses.length > 0
                     ? interviewCtx.priorCopilotResponses
                     : undefined,
-                tokenBudget: 4000,
+                // Own room for the overlay context (it outranks the transcript).
+                tokenBudget: 4000 + estimateTokens(buildOverlayUserContextBlock(interviewCtx.overlayContext)),
                 systemPrompt: RESTATE_MODE_PROMPT,
             });
 

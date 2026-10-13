@@ -1,5 +1,5 @@
 /** Max chars for overlay context editor paste (meeting prep, JD snippets, etc.). */
-export const OVERLAY_CONTEXT_MAX_CHARS = 8000;
+export const OVERLAY_CONTEXT_MAX_CHARS = 32000;
 
 /** XML block injected into LLM context for overlay editor content. */
 export function buildOverlayUserContextBlock(text: string | null | undefined): string {

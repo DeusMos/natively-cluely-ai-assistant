@@ -1,6 +1,8 @@
 import { LLMHelper } from '../LLMHelper';
 import { LOOKUP_MODE_PROMPT } from './prompts';
 import { PromptAssembler } from '../services/context/PromptAssembler';
+import { buildOverlayUserContextBlock } from '../services/context/overlayUserContext';
+import { estimateTokens } from './modelCapabilities';
 import type { InterviewContextBundle } from '../services/context/InterviewContextBuilder';
 
 export class LookupLLM {
@@ -45,7 +47,8 @@ export class LookupLLM {
                     : undefined,
                 intentContext,
                 retrievedModeContext: retrievedContext || undefined,
-                tokenBudget: 3000,
+                // Own room for the overlay context (it outranks the transcript).
+                tokenBudget: 3000 + estimateTokens(buildOverlayUserContextBlock(interviewCtx.overlayContext)),
                 systemPrompt: LOOKUP_MODE_PROMPT,
             });
 
